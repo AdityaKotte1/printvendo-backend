@@ -42,6 +42,20 @@ class User(Base):
     # STUDENT like anyone else. Guests have no wallet.
     is_guest: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
+    # Whether the address has been proved to belong to this person.
+    #
+    # False does NOT block signing in: a bounced or slow verification email
+    # would otherwise lock someone out of an account they just created. It is
+    # surfaced on /me so the modules that own risky actions can gate on it.
+    #
+    # Google sign-in sets this True -- Google already proved the address.
+    # Users migrated from the old backend are grandfathered True; they have
+    # been using the system for months and flipping them to unverified would
+    # gate the entire existing user base on cutover night.
+    email_verified: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+
     # Row id in the backend being replaced. Nullable, indexed, kept permanently
     # so a number that looks wrong later can be traced to its origin.
     legacy_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
@@ -70,6 +84,29 @@ class UserRole(Base):
     )
 
     user: Mapped[User] = relationship(back_populates="roles")
+
+
+class EmailVerification(Base):
+    """A pending "prove you own this address" token.
+
+    Stored as a hash for the same reason refresh tokens are: a database dump
+    must not hand anyone a working link. `used_at` makes a token single-use, so
+    a link forwarded or left in a mailbox cannot be replayed.
+    """
+
+    __tablename__ = "email_verifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class RefreshToken(Base):

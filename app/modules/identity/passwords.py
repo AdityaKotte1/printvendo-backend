@@ -43,6 +43,16 @@ def authenticate(db: Session, email: str, password: str) -> User:
     if user is None or not verify_password(password, user.hashed_password):
         raise Unauthorized(BAD_CREDENTIALS)
 
+    # repo.get_by_email already filters on is_active, so this is redundant
+    # today. It is here anyway because the security property should not depend
+    # on a detail of another function: a later change there -- "reactivate the
+    # account when they log in", say -- would otherwise turn this into an
+    # authentication bypass with nothing in this file to show it. Same generic
+    # message, so it cannot be used to tell a disabled account from a wrong
+    # password.
+    if not user.is_active:
+        raise Unauthorized(BAD_CREDENTIALS)
+
     if needs_rehash(user.hashed_password):
         user.hashed_password = hash_password(password)
         db.add(user)

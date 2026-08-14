@@ -31,9 +31,28 @@ def postgres_url() -> str:
     return url
 
 
+@pytest.fixture(scope="session")
+def schema(postgres_url: str) -> str:
+    """Build the whole schema from ORM metadata once per test session.
+
+    Dropping first is what makes this correct rather than merely convenient:
+    create_all uses checkfirst, so against an existing table it silently does
+    nothing -- add a column to a model and every test keeps running against the
+    old shape, failing with "column does not exist" a long way from the cause.
+    """
+    import app.modules.identity.models  # noqa: F401  (register the mappers)
+
+    engine = get_engine(postgres_url)
+    with engine.begin() as connection:
+        connection.execute(text("drop schema public cascade"))
+        connection.execute(text("create schema public"))
+    Base.metadata.create_all(engine)
+    return postgres_url
+
+
 @pytest.fixture
-def db_session(postgres_url: str) -> Iterator[Session]:
-    """A session on a schema built from the ORM metadata, rolled back after.
+def db_session(schema: str) -> Iterator[Session]:
+    """A session on the shared schema, rolled back after each test.
 
     Tables come from Base.metadata rather than from running migrations, so a
     model test fails on the model rather than on a migration nobody has written
@@ -42,10 +61,7 @@ def db_session(postgres_url: str) -> Iterator[Session]:
     The whole test runs inside one transaction that is rolled back at the end,
     so tests never see each other's rows and nothing needs cleaning up.
     """
-    import app.modules.identity.models  # noqa: F401  (register the mappers)
-
-    engine = get_engine(postgres_url)
-    Base.metadata.create_all(engine)
+    engine = get_engine(schema)
 
     connection = engine.connect()
     transaction = connection.begin()

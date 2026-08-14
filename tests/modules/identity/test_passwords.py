@@ -78,6 +78,33 @@ def test_authenticate_refuses_a_deactivated_account(db_session):
         authenticate(db_session, "off@example.test", "hunter2hunter2")
 
 
+def test_deactivation_is_enforced_even_if_the_repository_stops_filtering(
+    db_session, monkeypatch
+):
+    """The bypass must not depend on repo.get_by_email filtering is_active.
+
+    Simulates a future change there -- "reactivate the account on login" is the
+    plausible one -- and asserts authenticate still refuses. Without the
+    explicit check in authenticate, this test fails and a disabled account can
+    sign in.
+    """
+    from app.modules.identity import passwords
+
+    user = register(db_session, "off@example.test", "hunter2hunter2", None)
+    db_session.flush()
+    user.is_active = False
+    db_session.flush()
+
+    monkeypatch.setattr(
+        passwords.repo,
+        "get_by_email",
+        lambda db, email: db_session.query(User).filter(User.email == email).first(),
+    )
+
+    with pytest.raises(Unauthorized):
+        authenticate(db_session, "off@example.test", "hunter2hunter2")
+
+
 def test_a_legacy_pbkdf2_hash_is_upgraded_on_successful_login(db_session):
     """Migrated users arrive with pbkdf2 hashes; logging in moves them to bcrypt."""
     user = User(email="old@example.test", hashed_password=pbkdf2_sha256.hash("legacy pass"))
