@@ -16,6 +16,7 @@ dependencies = [
     "redis>=5.2",
     "cryptography>=43.0",
     "slowapi>=0.1.9",
+    "google-auth>=2.35",
 ]
 
 [project.optional-dependencies]
