@@ -1,0 +1,27 @@
+[importlinter]
+root_package = app
+
+[importlinter:contract:core-is-independent]
+name = core must not depend on modules or api
+type = forbidden
+source_modules =
+    app.core
+forbidden_modules =
+    app.modules
+    app.api
+
+[importlinter:contract:modules-do-not-depend-on-api]
+name = modules must not depend on the api layer
+type = forbidden
+source_modules =
+    app.modules
+forbidden_modules =
+    app.api
+
+[importlinter:contract:layers]
+name = api sits above modules sits above core
+type = layers
+layers =
+    app.api
+    app.modules
+    app.core
