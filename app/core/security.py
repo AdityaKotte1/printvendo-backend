@@ -17,7 +17,13 @@ from passlib.context import CryptContext
 
 ALGORITHM = "HS256"
 
-_pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# bcrypt is what we hash with. pbkdf2_sha256 is listed because that is what the
+# backend being replaced used, so every migrated user's stored hash is in that
+# scheme -- drop it and nobody who existed before the migration can log in.
+# deprecated="auto" marks it legacy: needs_update() reports True for those
+# hashes, so a successful login transparently re-hashes to bcrypt and the old
+# scheme drains away without a password reset.
+_pwd = CryptContext(schemes=["bcrypt", "pbkdf2_sha256"], deprecated="auto")
 
 
 class TokenType(StrEnum):
@@ -44,6 +50,19 @@ def hash_password(password: str) -> str:
 def verify_password(password: str, hashed: str) -> bool:
     try:
         return _pwd.verify(password, hashed)
+    except ValueError:
+        return False
+
+
+def needs_rehash(hashed: str) -> bool:
+    """True when a verified hash uses a legacy scheme and should be upgraded.
+
+    Call after a successful verify: if this returns True, re-hash the password
+    the user just proved they know and store the new value. That is what
+    migrates legacy pbkdf2_sha256 hashes to bcrypt without a password reset.
+    """
+    try:
+        return _pwd.needs_update(hashed)
     except ValueError:
         return False
 

@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 import pytest
+from passlib.hash import pbkdf2_sha256
 
 from app.core.security import (
     TokenError,
@@ -8,6 +9,7 @@ from app.core.security import (
     create_token,
     decode_token,
     hash_password,
+    needs_rehash,
     verify_password,
 )
 
@@ -28,6 +30,32 @@ def test_verify_accepts_correct_password():
 
 def test_verify_rejects_wrong_password():
     assert verify_password("wrong", hash_password("hunter2")) is False
+
+
+def test_legacy_pbkdf2_hashes_still_verify():
+    """Every user migrated from the old backend has a pbkdf2_sha256 hash.
+
+    If this fails, nobody who existed before the migration can log in.
+    """
+    legacy = pbkdf2_sha256.hash("hunter2")
+    assert verify_password("hunter2", legacy) is True
+    assert verify_password("wrong", legacy) is False
+
+
+def test_legacy_hashes_are_flagged_for_upgrade():
+    assert needs_rehash(pbkdf2_sha256.hash("hunter2")) is True
+
+
+def test_current_scheme_hashes_are_not_flagged_for_upgrade():
+    assert needs_rehash(hash_password("hunter2")) is False
+
+
+def test_new_hashes_use_bcrypt():
+    assert hash_password("hunter2").startswith("$2")
+
+
+def test_needs_rehash_on_garbage_does_not_raise():
+    assert needs_rehash("not-a-hash") is False
 
 
 def test_access_token_roundtrip():
