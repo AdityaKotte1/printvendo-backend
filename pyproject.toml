@@ -44,3 +44,10 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Alembic's revision template always imports `sa` and `Sequence`, which are
+# unused in a revision that adds no columns. The template itself is modernised
+# (see migrations/script.py.mako) so the UP rules still apply here -- only the
+# unavoidable unused-import noise is exempt.
+"migrations/versions/*.py" = ["F401"]
