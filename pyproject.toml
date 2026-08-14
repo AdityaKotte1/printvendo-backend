@@ -46,8 +46,11 @@ target-version = "py312"
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.per-file-ignores]
-# Alembic's revision template always imports `sa` and `Sequence`, which are
-# unused in a revision that adds no columns. The template itself is modernised
-# (see migrations/script.py.mako) so the UP rules still apply here -- only the
-# unavoidable unused-import noise is exempt.
-"migrations/versions/*.py" = ["F401"]
+# Revision bodies are machine-written by `alembic revision --autogenerate`:
+#   F401 - the template always imports `sa` and `Sequence`, unused in a
+#          revision that adds no columns.
+#   E501 - autogenerate emits one long call per column and does not wrap.
+# The template itself is modernised (migrations/script.py.mako) so the UP and
+# import-ordering rules still apply. Reformatting generated code by hand every
+# revision is not a sustainable alternative.
+"migrations/versions/*.py" = ["F401", "E501"]

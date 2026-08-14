@@ -26,8 +26,10 @@ if not database_url:
     raise RuntimeError("DATABASE_URL must be set to run migrations")
 config.set_main_option("sqlalchemy.url", database_url)
 
-# Module models are imported here as they are built. Empty for now.
-# from app.modules.identity import models as _identity_models  # noqa: F401
+# Every module's models are imported here so autogenerate sees the whole
+# schema. A module missing from this list is invisible to migrations, and its
+# tables silently never get created.
+from app.modules.identity import models as _identity_models  # noqa: F401,E402
 
 target_metadata = Base.metadata
 

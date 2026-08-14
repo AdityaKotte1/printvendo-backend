@@ -3,7 +3,27 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+from sqlalchemy import create_engine, text
+
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture
+def empty_database(postgres_url: str) -> str:
+    """A schema with nothing in it, for migrations to build from scratch.
+
+    The db_session fixture builds tables with Base.metadata.create_all, and
+    tests/modules runs before this file. Without the reset, `alembic upgrade
+    head` meets tables that already exist and fails on the first create_table --
+    a failure about test ordering, not about the migration.
+    """
+    engine = create_engine(postgres_url, isolation_level="AUTOCOMMIT")
+    with engine.connect() as connection:
+        connection.execute(text("drop schema public cascade"))
+        connection.execute(text("create schema public"))
+    engine.dispose()
+    return postgres_url
 
 
 def _alembic(args: list[str], url: str) -> subprocess.CompletedProcess:
@@ -20,15 +40,40 @@ def _alembic(args: list[str], url: str) -> subprocess.CompletedProcess:
     )
 
 
-def test_upgrade_head_succeeds_on_an_empty_database(postgres_url):
-    result = _alembic(["upgrade", "head"], postgres_url)
+def test_upgrade_head_succeeds_on_an_empty_database(empty_database):
+    result = _alembic(["upgrade", "head"], empty_database)
     assert result.returncode == 0, result.stderr
 
 
-def test_autogenerate_detects_no_drift_after_upgrade(postgres_url):
-    _alembic(["upgrade", "head"], postgres_url)
-    result = _alembic(["check"], postgres_url)
+def test_autogenerate_detects_no_drift_after_upgrade(empty_database):
+    """The migrations and the ORM models must describe the same schema.
+
+    This is the test that catches a model changed without a migration -- the
+    failure mode that turns into a production deploy where the code expects a
+    column the database does not have.
+    """
+    upgrade = _alembic(["upgrade", "head"], empty_database)
+    assert upgrade.returncode == 0, upgrade.stderr
+
+    result = _alembic(["check"], empty_database)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_downgrade_to_base_removes_everything(empty_database):
+    """A migration that cannot be undone cannot be rolled back in a bad deploy."""
+    _alembic(["upgrade", "head"], empty_database)
+
+    result = _alembic(["downgrade", "base"], empty_database)
+    assert result.returncode == 0, result.stderr
+
+    engine = create_engine(empty_database)
+    with engine.connect() as connection:
+        for table in ("users", "user_roles", "refresh_tokens"):
+            exists = connection.execute(
+                text("select to_regclass(:t)"), {"t": table}
+            ).scalar_one()
+            assert exists is None, f"{table} survived the downgrade"
+    engine.dispose()
 
 
 def test_migrations_refuse_to_run_without_a_database_url():
