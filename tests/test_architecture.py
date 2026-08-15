@@ -50,4 +50,4 @@ def test_all_three_contracts_are_actually_evaluated():
     Asserting the reported count keeps that from passing unnoticed.
     """
     result = _lint_imports()
-    assert "Contracts: 3 kept, 0 broken." in result.stdout, result.stdout
+    assert "Contracts: 5 kept, 0 broken." in result.stdout, result.stdout

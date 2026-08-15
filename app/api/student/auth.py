@@ -22,10 +22,10 @@ from app.api.deps import (
 from app.core.config import Settings
 from app.core.errors import Unauthorized
 from app.core.notifier import Notifier
+from app.modules.identity import User
 from app.modules.identity import repository as repo
 from app.modules.identity.google import sign_in_with_google
 from app.modules.identity.guests import create_guest
-from app.modules.identity.models import User
 from app.modules.identity.passwords import authenticate, register
 from app.modules.identity.sessions import (
     REFRESH_LIFETIME,

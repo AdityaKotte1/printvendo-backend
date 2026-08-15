@@ -18,6 +18,26 @@ source_modules =
 forbidden_modules =
     app.api
 
+[importlinter:contract:api-does-not-touch-orm-models]
+name = the api layer goes through services, never through the ORM module
+type = forbidden
+source_modules =
+    app.api
+forbidden_modules =
+    app.modules.identity.models
+# Only DIRECT imports are a violation. The api layer calls services, and those
+# services obviously use their own models -- forbidding that transitively would
+# ban the api from calling anything at all. What must not happen is api code
+# reaching for the ORM module itself; entity types come from the package's
+# public surface (`from app.modules.identity import User`).
+allow_indirect_imports = True
+
+[importlinter:contract:modules-are-independent]
+name = bounded contexts do not reach into each other
+type = independence
+modules =
+    app.modules.identity
+
 [importlinter:contract:layers]
 name = api sits above modules sits above core
 type = layers

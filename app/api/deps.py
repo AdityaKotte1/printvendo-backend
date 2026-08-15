@@ -17,8 +17,8 @@ from app.core.db import get_session_factory
 from app.core.errors import Forbidden, Unauthorized
 from app.core.notifier import LoggingNotifier, Notifier
 from app.core.security import TokenError, TokenType, decode_token
+from app.modules.identity import User
 from app.modules.identity import repository as repo
-from app.modules.identity.models import User
 from app.modules.identity.roles import Role
 
 NOT_SIGNED_IN = "You need to sign in to do that."

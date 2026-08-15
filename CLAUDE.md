@@ -71,9 +71,36 @@ Copy `.env.example` to `.env` and fill it. The app refuses to boot with a
   ruff-clean. Do not restore Alembic's stock template.
 - **Workers may exceed 1.** The device WebSocket registry will live in Redis, not
   a per-process dict — the constraint the old backend could never lift.
+- **Refresh rotation has a 60-second grace window** (`identity/sessions.py`).
+  Removing it reintroduces the old backend's "logs out frequently" bug, where
+  two tabs refreshing at once signed the user out. Verified: setting
+  `GRACE_SECONDS = 0` fails exactly one test and no others. Reuse *after* the
+  window is treated as theft and revokes the whole token family.
+- **`app.core.security` accepts `pbkdf2_sha256`** because every user migrated
+  from the old backend has one. A successful login re-hashes to bcrypt. Do not
+  drop the legacy scheme until the migration is long done — dropping it early
+  locks out every pre-cutover account.
+- **Unverified users can still sign in.** Blocking login on email verification
+  locks someone out of an account when mail is slow or bounces. Status is on
+  `/me`; gating risky actions belongs to the modules that own them.
+- **Identity never sends email.** It issues a token and hands it to a `Notifier`
+  (`app/core/notifier.py`). Wiring a provider into the auth module would make
+  every test that registers a user depend on it.
+- **The api layer may not import a module's `models`.** Entity types come from
+  the package surface (`from app.modules.identity import User`). Enforced by the
+  `api-does-not-touch-orm-models` contract, which allows indirect imports —
+  calling a service that uses its own models is fine.
 
 ## Status
 
-Foundation only: core primitives, app factory, health, Alembic, CI, and the
-boundary and authorisation harnesses. **69 tests passing.** No domain modules
-yet — see §12 of the spec for the build order. Next is sub-project 2, identity.
+Foundation and identity. **207 tests passing**, 5 import contracts kept.
+
+- `app/core/` — config, db, ids, money, errors, crypto, security, notifier
+- `app/modules/identity/` — users, roles, sessions, password/Google/guest
+  sign-in, email verification
+- `app/api/` — `deps` (current_user, role guards) and `student/auth`
+  (`/v1/app/auth/*`, 9 routes)
+
+Next is sub-project 3, kiosks — registry, `kiosk_type`, onboarding, pricing,
+paper, assignments, and the refiller invite flow. It is the first module with
+per-scope authorisation, so it is where `kiosk_scope` gets built.
