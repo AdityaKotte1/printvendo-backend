@@ -1,3 +1,5 @@
+import dataclasses
+
 import pytest
 
 from app.modules.identity import repository as identity_repo
@@ -124,7 +126,7 @@ def test_scope_is_immutable(db_session):
     """Nothing downstream may widen a scope it was handed."""
     owner = _user(db_session, "owner@example.com", Role.OWNER)
     scope = kiosk_scope(db_session, owner)
-    with pytest.raises(Exception):
+    with pytest.raises(dataclasses.FrozenInstanceError):
         scope.is_unrestricted = True
 
 
