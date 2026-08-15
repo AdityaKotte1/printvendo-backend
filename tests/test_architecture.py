@@ -42,12 +42,16 @@ def test_import_contracts_hold():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_all_three_contracts_are_actually_evaluated():
-    """Guard against a config that silently checks nothing.
+# Bump deliberately when a contract is added. The exact count is the point:
+# an .importlinter with an unreadable root_package, or with contracts typo'd
+# out of existence, still exits 0 -- a green build that proves nothing. A
+# vaguer assertion would not notice a contract quietly disappearing.
+EXPECTED_CONTRACTS = 6
 
-    An .importlinter with an unreadable root_package, or with every contract
-    typo'd out of existence, still exits 0 -- a green build that proves nothing.
-    Asserting the reported count keeps that from passing unnoticed.
-    """
+
+def test_every_contract_is_actually_evaluated():
+    """Guard against a config that silently checks nothing."""
     result = _lint_imports()
-    assert "Contracts: 5 kept, 0 broken." in result.stdout, result.stdout
+    assert f"Contracts: {EXPECTED_CONTRACTS} kept, 0 broken." in result.stdout, (
+        result.stdout
+    )

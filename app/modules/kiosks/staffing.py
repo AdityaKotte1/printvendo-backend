@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import BadRequest, Conflict
 from app.modules.identity import repository as identity_repo
-from app.modules.identity.models import User
+from app.modules.identity import User
 from app.modules.kiosks.enums import AssignmentRole
 from app.modules.kiosks.models import Kiosk, KioskAssignment, StaffInvite
 

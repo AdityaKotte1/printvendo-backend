@@ -15,8 +15,8 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.modules.identity import User
 from app.modules.identity import repository as identity_repo
-from app.modules.identity.models import User
 from app.modules.identity.roles import Role
 from app.modules.kiosks.models import KioskAssignment
 

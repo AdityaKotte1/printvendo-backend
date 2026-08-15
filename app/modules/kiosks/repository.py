@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import NotFound
 from app.core.ids import IdPrefix, InvalidId, parse_id
-from app.modules.identity.models import User
+from app.modules.identity import User
 from app.modules.kiosks.models import Kiosk, KioskAssignment, PaperRefillLog
 from app.modules.kiosks.scope import Scope
 
