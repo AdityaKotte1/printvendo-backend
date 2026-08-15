@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.core.errors import NotFound
 from app.core.ids import IdPrefix, InvalidId, parse_id
 from app.modules.identity import User
+from app.modules.kiosks.enums import AssignmentRole
 from app.modules.kiosks.models import Kiosk, KioskAssignment, PaperRefillLog
 from app.modules.kiosks.scope import Scope
 
@@ -85,3 +86,26 @@ def resolve_staff_user(db: Session, kiosk: Kiosk, public_id: str) -> User:
     if user is None:
         raise NotFound(NO_SUCH_STAFF)
     return user
+
+
+def owner_of(db: Session, kiosk: Kiosk) -> User | None:
+    """The kiosk's owner, or None if nobody owns it.
+
+    None is a real answer, not an error: platform kiosks have no owner by
+    design. It is also a *warning* for a SOLD or SAAS kiosk, which is supposed
+    to belong to somebody -- production had exactly one such kiosk, quietly
+    routing its takings to the platform.
+
+    Takes no Scope: ownership is a property of the kiosk, and the caller has
+    already been through a scoped read to hold one.
+    """
+    stmt = (
+        select(User)
+        .join(KioskAssignment, KioskAssignment.user_id == User.id)
+        .where(
+            KioskAssignment.kiosk_id == kiosk.id,
+            KioskAssignment.role == AssignmentRole.OWNER,
+        )
+        .order_by(KioskAssignment.created_at)
+    )
+    return db.execute(stmt).scalars().first()

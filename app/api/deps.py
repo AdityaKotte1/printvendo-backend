@@ -24,10 +24,10 @@ from app.modules.kiosks import (
     BandSource,
     BillingCheck,
     PlatformBand,
-    PlatformOnlyBilling,
     Scope,
     kiosk_scope,
 )
+from app.modules.payments.gate import GateBilling
 
 NOT_SIGNED_IN = "You need to sign in to do that."
 NOT_ALLOWED = "You do not have access to that."
@@ -133,12 +133,12 @@ KioskScope = Annotated[Scope, Depends(get_kiosk_scope)]
 def get_billing_check() -> BillingCheck:
     """Whether a kiosk's owner can collect into their own account.
 
-    Overridden by the payments module when it lands. Until then it answers
-    False for every owner-gateway kiosk, so a SOLD or SAAS kiosk cannot be set
-    live yet -- failing closed, because the alternative silently routes real
-    payments to an account that may not exist.
+    This is `payments.gate.kiosk_payment_gate` behind the protocol the kiosks
+    module declares. Deliberately the same function the payment path uses: if
+    the LIVE gate and the payment routing could disagree, a kiosk could sit LIVE
+    while unable to take a rupee.
     """
-    return PlatformOnlyBilling()
+    return GateBilling()
 
 
 def get_band_source() -> BandSource:
