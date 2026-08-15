@@ -24,7 +24,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.db import Base
+from app.core.db import Base, EnumText
 from app.core.ids import IdPrefix, new_id
 from app.modules.kiosks.enums import (
     AssignmentRole,
@@ -47,10 +47,12 @@ class Kiosk(Base):
     name: Mapped[str] = mapped_column(String(200), unique=True, index=True)
 
     kiosk_type: Mapped[KioskType] = mapped_column(
-        String(20), default=KioskType.PLATFORM, server_default=KioskType.PLATFORM.value
+        EnumText(KioskType, 20),
+        default=KioskType.PLATFORM,
+        server_default=KioskType.PLATFORM.value,
     )
     onboarding_stage: Mapped[OnboardingStage] = mapped_column(
-        String(24),
+        EnumText(OnboardingStage, 24),
         default=OnboardingStage.REGISTERED,
         server_default=OnboardingStage.REGISTERED.value,
         index=True,
@@ -123,7 +125,7 @@ class KioskDevice(Base):
     token_hash: Mapped[str] = mapped_column(String(64), index=True)
 
     status: Mapped[DeviceStatus] = mapped_column(
-        String(16),
+        EnumText(DeviceStatus, 16),
         default=DeviceStatus.OFFLINE,
         server_default=DeviceStatus.OFFLINE.value,
     )
@@ -199,7 +201,7 @@ class KioskAssignment(Base):
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
-    role: Mapped[AssignmentRole] = mapped_column(String(16), index=True)
+    role: Mapped[AssignmentRole] = mapped_column(EnumText(AssignmentRole, 16), index=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -256,7 +258,7 @@ class StaffInvite(Base):
     )
 
     email: Mapped[str] = mapped_column(String(320), index=True)
-    role: Mapped[AssignmentRole] = mapped_column(String(16))
+    role: Mapped[AssignmentRole] = mapped_column(EnumText(AssignmentRole, 16))
 
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

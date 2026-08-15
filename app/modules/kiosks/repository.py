@@ -14,10 +14,12 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import NotFound
 from app.core.ids import IdPrefix, InvalidId, parse_id
-from app.modules.kiosks.models import Kiosk
+from app.modules.identity.models import User
+from app.modules.kiosks.models import Kiosk, KioskAssignment, PaperRefillLog
 from app.modules.kiosks.scope import Scope
 
 NO_SUCH_KIOSK = "That kiosk does not exist."
+NO_SUCH_STAFF = "Nobody by that id works at this kiosk."
 
 
 def list_kiosks(
@@ -44,3 +46,42 @@ def get_kiosk(db: Session, scope: Scope, public_id: str) -> Kiosk:
     if kiosk is None or not scope.allows(kiosk.id):
         raise NotFound(NO_SUCH_KIOSK)
     return kiosk
+
+
+def list_refill_logs(db: Session, kiosk: Kiosk, *, limit: int = 50) -> list[PaperRefillLog]:
+    """Paper history for one kiosk, newest first.
+
+    Takes a Kiosk rather than an id: the caller has already been through
+    get_kiosk with a Scope to obtain one, so this cannot reach outside it.
+    """
+    stmt = (
+        select(PaperRefillLog)
+        .where(PaperRefillLog.kiosk_id == kiosk.id)
+        .order_by(PaperRefillLog.created_at.desc())
+        .limit(max(1, min(limit, 500)))
+    )
+    return list(db.execute(stmt).scalars())
+
+
+def resolve_staff_user(db: Session, kiosk: Kiosk, public_id: str) -> User:
+    """A user public id, resolved *only* if they work at this kiosk.
+
+    Looking the user up globally and then acting would let an owner name any
+    account on the platform and learn from the response whether it exists. The
+    join makes that impossible: someone who does not work here is simply not
+    found.
+    """
+    try:
+        parse_id(public_id, IdPrefix.USER)
+    except InvalidId:
+        raise NotFound(NO_SUCH_STAFF) from None
+
+    stmt = (
+        select(User)
+        .join(KioskAssignment, KioskAssignment.user_id == User.id)
+        .where(KioskAssignment.kiosk_id == kiosk.id, User.public_id == public_id)
+    )
+    user = db.execute(stmt).scalars().first()
+    if user is None:
+        raise NotFound(NO_SUCH_STAFF)
+    return user

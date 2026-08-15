@@ -93,11 +93,18 @@ def test_accepting_binds_the_invitee(db_session, kiosk, owner):
     token = _invite(db_session, kiosk, owner)
     refiller = _user(db_session, "refiller@example.com")
 
-    assignment = accept_invite(db_session, token, user=refiller)
+    accepted_kiosk, role = accept_invite(db_session, token, user=refiller)
     db_session.flush()
 
-    assert assignment.kiosk_id == kiosk.id
-    assert assignment.user_id == refiller.id
+    assert accepted_kiosk.id == kiosk.id
+    assert role is AssignmentRole.REFILLER
+
+    binding = (
+        db_session.query(KioskAssignment)
+        .filter_by(kiosk_id=kiosk.id, user_id=refiller.id)
+        .one()
+    )
+    assert binding.role == AssignmentRole.REFILLER
 
 
 def test_accepting_grants_the_platform_role(db_session, kiosk, owner):

@@ -93,11 +93,16 @@ def invite_staff(
     return token
 
 
-def accept_invite(db: Session, token: str, *, user: User) -> KioskAssignment:
+def accept_invite(
+    db: Session, token: str, *, user: User
+) -> tuple[Kiosk, AssignmentRole]:
     """Redeem an invitation. The accepting user must own the invited address.
 
     Binding the *presenting* user rather than the invited address would turn a
     forwarded link into a way to attach an arbitrary account to someone's kiosk.
+
+    Returns the kiosk and role rather than the assignment row, so the caller can
+    answer "which kiosk, in what capacity" without reaching into the ORM.
     """
     stmt = select(StaffInvite).where(StaffInvite.token_hash == _hash(token))
     invite = db.execute(stmt).scalar_one_or_none()
@@ -127,19 +132,18 @@ def accept_invite(db: Session, token: str, *, user: User) -> KioskAssignment:
     invite.accepted_at = now
     db.add(invite)
 
-    if existing is not None:
-        return existing
+    kiosk = db.get(Kiosk, invite.kiosk_id)
 
-    assignment = KioskAssignment(
-        kiosk_id=invite.kiosk_id, user_id=user.id, role=invite.role
-    )
-    db.add(assignment)
-    db.flush()
+    if existing is None:
+        db.add(
+            KioskAssignment(kiosk_id=invite.kiosk_id, user_id=user.id, role=invite.role)
+        )
+        db.flush()
 
     # The role on the account follows the assignment: someone who has accepted a
     # refiller invite is a refiller, and the identity module is where that lives.
     identity_repo.grant_role(db, user.id, _identity_role_for(invite.role))
-    return assignment
+    return kiosk, invite.role
 
 
 def _identity_role_for(role: AssignmentRole):

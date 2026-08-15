@@ -67,9 +67,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Imported inside the factory on purpose: at module scope this would make
     # `import app.main` pull in the whole route tree, and tests/authz builds an
     # app purely to enumerate routes.
+    from app.api.owner import kiosks as owner_kiosks
+    from app.api.refiller import kiosks as refiller_kiosks
     from app.api.student import auth as student_auth
+    from app.api.student import staff as student_staff
 
     app.include_router(student_auth.router)
+    app.include_router(student_staff.router)
+    app.include_router(owner_kiosks.router)
+    app.include_router(refiller_kiosks.router)
 
     @app.get("/health", tags=["meta"])
     def health() -> dict[str, str]:

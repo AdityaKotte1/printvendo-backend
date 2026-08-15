@@ -35,4 +35,31 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     ("POST", "/v1/app/auth/change-password"): {STUDENT, OWNER, REFILLER, ADMIN},
     ("POST", "/v1/app/auth/resend-verification"): {STUDENT, OWNER, REFILLER, ADMIN},
     ("GET", "/v1/app/auth/me"): {STUDENT, OWNER, REFILLER, ADMIN},
+    # Anyone signed in may accept an invitation addressed to them; the token is
+    # what authorises it, and the service checks it matches their address.
+    ("POST", "/v1/app/staff/accept-invite"): {STUDENT, OWNER, REFILLER, ADMIN},
+    # ── owner ───────────────────────────────────────────────────────────────
+    # ADMIN appears alongside OWNER throughout because admin is not a separate
+    # router here -- it is the same routes with a wider kiosk scope.
+    ("GET", "/v1/owner/kiosks"): {OWNER, ADMIN},
+    ("GET", "/v1/owner/kiosks/{kiosk_id}"): {OWNER, ADMIN},
+    ("POST", "/v1/owner/kiosks/{kiosk_id}/status"): {OWNER, ADMIN},
+    ("GET", "/v1/owner/kiosks/{kiosk_id}/pricing"): {OWNER, ADMIN},
+    ("PUT", "/v1/owner/kiosks/{kiosk_id}/pricing"): {OWNER, ADMIN},
+    ("GET", "/v1/owner/kiosks/{kiosk_id}/paper"): {OWNER, ADMIN},
+    ("PUT", "/v1/owner/kiosks/{kiosk_id}/paper"): {OWNER, ADMIN},
+    ("POST", "/v1/owner/kiosks/{kiosk_id}/paper/reset"): {OWNER, ADMIN},
+    ("GET", "/v1/owner/kiosks/{kiosk_id}/refill-logs"): {OWNER, ADMIN},
+    ("GET", "/v1/owner/kiosks/{kiosk_id}/staff"): {OWNER, ADMIN},
+    ("POST", "/v1/owner/kiosks/{kiosk_id}/staff/invite"): {OWNER, ADMIN},
+    ("DELETE", "/v1/owner/kiosks/{kiosk_id}/staff/{user_id}"): {OWNER, ADMIN},
+    # ── refiller ────────────────────────────────────────────────────────────
+    # Paper only. No pricing, no earnings, no student identity.
+    ("GET", "/v1/refiller/kiosks"): {REFILLER, ADMIN},
+    ("GET", "/v1/refiller/kiosks/{kiosk_id}"): {REFILLER, ADMIN},
+    ("GET", "/v1/refiller/kiosks/{kiosk_id}/paper"): {REFILLER, ADMIN},
+    ("PUT", "/v1/refiller/kiosks/{kiosk_id}/paper"): {REFILLER, ADMIN},
+    ("POST", "/v1/refiller/kiosks/{kiosk_id}/paper/reset"): {REFILLER, ADMIN},
+    ("POST", "/v1/refiller/kiosks/{kiosk_id}/paper/out-of-paper"): {REFILLER, ADMIN},
+    ("GET", "/v1/refiller/kiosks/{kiosk_id}/refill-logs"): {REFILLER, ADMIN},
 }

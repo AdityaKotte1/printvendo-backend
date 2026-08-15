@@ -18,7 +18,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.db import Base
+from app.core.db import Base, EnumText
 from app.core.ids import IdPrefix, new_id
 from app.modules.identity.roles import Role
 
@@ -79,7 +79,7 @@ class UserRole(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    role: Mapped[Role] = mapped_column(String(20))
+    role: Mapped[Role] = mapped_column(EnumText(Role, 20))
     granted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -110,7 +110,7 @@ class OneTimeToken(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
 
-    purpose: Mapped[TokenPurpose] = mapped_column(String(32), index=True)
+    purpose: Mapped[TokenPurpose] = mapped_column(EnumText(TokenPurpose, 32), index=True)
 
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
 

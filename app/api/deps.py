@@ -20,6 +20,14 @@ from app.core.security import TokenError, TokenType, decode_token
 from app.modules.identity import User
 from app.modules.identity import repository as repo
 from app.modules.identity.roles import Role
+from app.modules.kiosks import (
+    BandSource,
+    BillingCheck,
+    PlatformBand,
+    PlatformOnlyBilling,
+    Scope,
+    kiosk_scope,
+)
 
 NOT_SIGNED_IN = "You need to sign in to do that."
 NOT_ALLOWED = "You do not have access to that."
@@ -105,3 +113,39 @@ def require_role(role: Role):
         return user
 
     return _guard
+
+
+def get_kiosk_scope(
+    user: CurrentUser,
+    db: Annotated[Session, Depends(get_db)],
+) -> Scope:
+    """Which kiosks this caller may touch.
+
+    Injected rather than computed inside handlers so no route can accidentally
+    query kiosks without one -- the repository has no unscoped read.
+    """
+    return kiosk_scope(db, user)
+
+
+KioskScope = Annotated[Scope, Depends(get_kiosk_scope)]
+
+
+def get_billing_check() -> BillingCheck:
+    """Whether a kiosk's owner can collect into their own account.
+
+    Overridden by the payments module when it lands. Until then it answers
+    False for every owner-gateway kiosk, so a SOLD or SAAS kiosk cannot be set
+    live yet -- failing closed, because the alternative silently routes real
+    payments to an account that may not exist.
+    """
+    return PlatformOnlyBilling()
+
+
+def get_band_source() -> BandSource:
+    """The price band an owner must stay within.
+
+    Overridden by the billing module. Until then it is unbounded -- failing
+    open, unlike the billing check above, because a silly price is visible and
+    reversible while a misrouted payment is neither.
+    """
+    return PlatformBand()

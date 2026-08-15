@@ -75,3 +75,27 @@ def test_the_exception_propagates_rather_than_being_swallowed(postgres_url, prob
         with session_scope(postgres_url) as session:
             session.execute(text("insert into scope_probe values (3)"))
             raise RuntimeError("caller blew up")
+
+
+def test_enum_columns_load_back_as_the_enum(db_session):
+    """A `Mapped[SomeEnum]` column must not return a bare str.
+
+    Without EnumText the annotation lies: the value round-trips as a plain
+    string. Because these are StrEnums the lie is quiet -- `value == Enum.X`
+    still passes, so tests stay green -- while `value.value` raises
+    AttributeError and `value is Enum.X` is False. This asserts identity and
+    attribute access, which are the two things equality hides.
+    """
+    from app.modules.kiosks.enums import AssignmentRole, KioskType, OnboardingStage
+    from app.modules.kiosks.models import Kiosk
+
+    kiosk = Kiosk(name="Enum Probe")
+    db_session.add(kiosk)
+    db_session.flush()
+    db_session.expire(kiosk)
+
+    assert kiosk.kiosk_type is KioskType.PLATFORM
+    assert kiosk.onboarding_stage is OnboardingStage.REGISTERED
+    assert kiosk.kiosk_type.value == "platform"
+
+    assert isinstance(AssignmentRole.OWNER, AssignmentRole)
