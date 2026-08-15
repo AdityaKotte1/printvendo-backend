@@ -238,3 +238,140 @@ def test_resend_answers_the_same_for_an_already_verified_account(client, notifie
 
     assert response.status_code == 202
     assert len(notifier.sent) == 1  # nothing new sent
+
+
+# ── password reset ──────────────────────────────────────────────────────────
+
+
+class ResetRecordingNotifier(RecordingNotifier):
+    def __init__(self) -> None:
+        super().__init__()
+        self.resets: list[tuple[str, str]] = []
+
+    def send_password_reset(self, *, email: str, token: str) -> None:
+        self.resets.append((email, token))
+
+
+@pytest.fixture
+def reset_notifier() -> ResetRecordingNotifier:
+    return ResetRecordingNotifier()
+
+
+@pytest.fixture
+def reset_client(db_session, reset_notifier) -> TestClient:
+    app = create_app(SETTINGS)
+    app.dependency_overrides[get_db] = lambda: db_session
+    app.dependency_overrides[get_secret] = lambda: SECRET
+    app.dependency_overrides[get_notifier] = lambda: reset_notifier
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def _forgot(client: TestClient, email: str = "a@example.com"):
+    return client.post("/v1/app/auth/forgot-password", json={"email": email})
+
+
+def test_forgot_password_accepts_a_known_address(reset_client):
+    _register(reset_client)
+    assert _forgot(reset_client).status_code == 202
+
+
+def test_forgot_password_answers_the_same_for_an_unknown_address(reset_client):
+    """Anything else makes this endpoint a free membership oracle."""
+    _register(reset_client)
+    known = _forgot(reset_client, "a@example.com")
+    unknown = _forgot(reset_client, "nobody@example.com")
+
+    assert known.status_code == unknown.status_code
+    assert known.json() == unknown.json()
+
+
+def test_only_a_known_address_actually_gets_an_email(reset_client, reset_notifier):
+    _register(reset_client)
+    _forgot(reset_client, "nobody@example.com")
+    assert reset_notifier.resets == []
+
+    _forgot(reset_client, "a@example.com")
+    assert len(reset_notifier.resets) == 1
+
+
+def test_resetting_with_the_emailed_token_works(reset_client, reset_notifier):
+    _register(reset_client)
+    _forgot(reset_client)
+    _, token = reset_notifier.resets[0]
+
+    response = reset_client.post(
+        "/v1/app/auth/reset-password",
+        json={"token": token, "password": "a brand new password"},
+    )
+    assert response.status_code == 200
+    assert response.json()["access_token"]
+
+
+def test_the_new_password_works_and_the_old_one_does_not(reset_client, reset_notifier):
+    _register(reset_client)
+    _forgot(reset_client)
+    _, token = reset_notifier.resets[0]
+    reset_client.post(
+        "/v1/app/auth/reset-password",
+        json={"token": token, "password": "a brand new password"},
+    )
+
+    assert _login(reset_client, password=PASSWORD).status_code == 401
+    assert _login(reset_client, password="a brand new password").status_code == 200
+
+
+def test_a_bad_reset_token_is_400(reset_client):
+    response = reset_client.post(
+        "/v1/app/auth/reset-password",
+        json={"token": "nonsense", "password": "a brand new password"},
+    )
+    assert response.status_code == 400
+
+
+def test_reset_rejects_a_short_password(reset_client, reset_notifier):
+    _register(reset_client)
+    _forgot(reset_client)
+    _, token = reset_notifier.resets[0]
+
+    response = reset_client.post(
+        "/v1/app/auth/reset-password", json={"token": token, "password": "short"}
+    )
+    assert response.status_code == 422
+
+
+# ── change password ─────────────────────────────────────────────────────────
+
+
+def test_change_password_requires_a_token(client):
+    response = client.post(
+        "/v1/app/auth/change-password",
+        json={"current_password": PASSWORD, "new_password": "a brand new password"},
+    )
+    assert response.status_code == 401
+
+
+def test_change_password_requires_the_current_one(client):
+    _register(client)
+    token = _login(client).json()["access_token"]
+
+    response = client.post(
+        "/v1/app/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_password": "wrong", "new_password": "a brand new password"},
+    )
+    assert response.status_code == 401
+
+
+def test_change_password_works_and_returns_a_fresh_token(client):
+    _register(client)
+    token = _login(client).json()["access_token"]
+
+    response = client.post(
+        "/v1/app/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_password": PASSWORD, "new_password": "a brand new password"},
+    )
+    assert response.status_code == 200
+    assert response.json()["access_token"]
+
+    assert _login(client, password="a brand new password").status_code == 200

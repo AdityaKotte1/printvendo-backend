@@ -5,6 +5,7 @@ service functions, so the storage shape stays changeable.
 """
 
 from datetime import datetime
+from enum import StrEnum
 
 from sqlalchemy import (
     Boolean,
@@ -86,18 +87,30 @@ class UserRole(Base):
     user: Mapped[User] = relationship(back_populates="roles")
 
 
-class EmailVerification(Base):
-    """A pending "prove you own this address" token.
+class TokenPurpose(StrEnum):
+    EMAIL_VERIFICATION = "email_verification"
+    PASSWORD_RESET = "password_reset"
+
+
+class OneTimeToken(Base):
+    """A hashed, single-use, expiring token -- for any purpose that needs one.
+
+    Email verification and password reset were separate tables in the first
+    draft. They had identical columns and identical security requirements, which
+    is two places to get "single-use" wrong and two places for a replay guard to
+    exist in only one of them. `purpose` keeps them apart while the mechanism
+    stays single.
 
     Stored as a hash for the same reason refresh tokens are: a database dump
-    must not hand anyone a working link. `used_at` makes a token single-use, so
-    a link forwarded or left in a mailbox cannot be replayed.
+    must not hand anyone a working link.
     """
 
-    __tablename__ = "email_verifications"
+    __tablename__ = "one_time_tokens"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+
+    purpose: Mapped[TokenPurpose] = mapped_column(String(32), index=True)
 
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
 

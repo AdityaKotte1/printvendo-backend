@@ -22,6 +22,10 @@ class Notifier(Protocol):
         """Deliver a verification link for `token` to `email`."""
         ...
 
+    def send_password_reset(self, *, email: str, token: str) -> None:
+        """Deliver a password-reset link for `token` to `email`."""
+        ...
+
 
 class LoggingNotifier:
     """Writes what would have been sent. The default until a provider lands."""
@@ -29,9 +33,15 @@ class LoggingNotifier:
     def send_email_verification(self, *, email: str, token: str) -> None:
         logger.info("email verification for %s -- token %s", email, token)
 
+    def send_password_reset(self, *, email: str, token: str) -> None:
+        logger.info("password reset for %s -- token %s", email, token)
+
 
 class NullNotifier:
     """Sends nothing at all. For tests that do not care."""
 
     def send_email_verification(self, *, email: str, token: str) -> None:
+        return None
+
+    def send_password_reset(self, *, email: str, token: str) -> None:
         return None

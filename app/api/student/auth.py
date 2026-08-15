@@ -27,6 +27,7 @@ from app.modules.identity import repository as repo
 from app.modules.identity.google import sign_in_with_google
 from app.modules.identity.guests import create_guest
 from app.modules.identity.passwords import authenticate, register
+from app.modules.identity.reset import change_password, complete_reset, start_reset
 from app.modules.identity.sessions import (
     REFRESH_LIFETIME,
     issue_tokens,
@@ -230,3 +231,69 @@ def me(
     db: Annotated[Session, Depends(get_db)],
 ) -> MeResponse:
     return _me(user, db)
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str = Field(min_length=8, max_length=128)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+@router.post("/forgot-password", status_code=status.HTTP_202_ACCEPTED)
+def forgot_password(
+    payload: ForgotPasswordRequest,
+    db: Annotated[Session, Depends(get_db)],
+    notifier: Annotated[Notifier, Depends(get_notifier)],
+) -> dict[str, str]:
+    """Begin a password reset.
+
+    Answers identically whether or not the address has an account. Anything
+    else turns this endpoint into a free membership oracle -- and it has to be
+    open, because someone who cannot sign in is exactly who needs it.
+    """
+    started = start_reset(db, payload.email)
+    if started is not None:
+        user, token = started
+        notifier.send_password_reset(email=user.email, token=token)
+
+    return {"detail": "If that address has an account, a reset link is on its way."}
+
+
+@router.post("/reset-password", response_model=TokenResponse)
+def reset_password(
+    payload: ResetPasswordRequest,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    secret: Annotated[str, Depends(get_secret)],
+    settings: Annotated[Settings, Depends(get_settings_from_app)],
+) -> TokenResponse:
+    """Set a new password from a reset link and sign in on this device.
+
+    complete_reset revokes every existing session, so the pair issued here is
+    the only one alive afterwards -- which is the point: whoever else had the
+    old password is now out.
+    """
+    user = complete_reset(db, payload.token, payload.password)
+    return _signed_in(user, db, response, secret, settings)
+
+
+@router.post("/change-password", response_model=TokenResponse)
+def change_own_password(
+    payload: ChangePasswordRequest,
+    user: CurrentUser,
+    response: Response,
+    db: Annotated[Session, Depends(get_db)],
+    secret: Annotated[str, Depends(get_secret)],
+    settings: Annotated[Settings, Depends(get_settings_from_app)],
+) -> TokenResponse:
+    """Change a password while signed in, ending every other session."""
+    change_password(db, user, current=payload.current_password, new=payload.new_password)
+    return _signed_in(user, db, response, secret, settings)

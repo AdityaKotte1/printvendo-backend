@@ -28,6 +28,11 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     ("POST", "/v1/app/auth/refresh"): {PUBLIC},
     ("POST", "/v1/app/auth/logout"): {PUBLIC},
     ("POST", "/v1/app/auth/verify-email"): {PUBLIC},
+    # Forgot/reset are PUBLIC by necessity: someone who cannot sign in is
+    # exactly who needs them. The reset token is the credential.
+    ("POST", "/v1/app/auth/forgot-password"): {PUBLIC},
+    ("POST", "/v1/app/auth/reset-password"): {PUBLIC},
+    ("POST", "/v1/app/auth/change-password"): {STUDENT, OWNER, REFILLER, ADMIN},
     ("POST", "/v1/app/auth/resend-verification"): {STUDENT, OWNER, REFILLER, ADMIN},
     ("GET", "/v1/app/auth/me"): {STUDENT, OWNER, REFILLER, ADMIN},
 }

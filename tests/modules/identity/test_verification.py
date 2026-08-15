@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.core.errors import BadRequest
-from app.modules.identity.models import EmailVerification, User
+from app.modules.identity.models import OneTimeToken, User
 from app.modules.identity.passwords import register
 from app.modules.identity.verification import (
     TOKEN_LIFETIME,
@@ -19,10 +19,10 @@ def user(db_session) -> User:
     return u
 
 
-def _row(db_session, token: str) -> EmailVerification:
-    from app.modules.identity.verification import _hash
+def _row(db_session, token: str) -> OneTimeToken:
+    from app.modules.identity.tokens import _hash
 
-    return db_session.query(EmailVerification).filter_by(token_hash=_hash(token)).one()
+    return db_session.query(OneTimeToken).filter_by(token_hash=_hash(token)).one()
 
 
 def test_a_new_registration_is_not_verified(db_session, user):
@@ -39,7 +39,7 @@ def test_the_token_is_stored_only_as_a_hash(db_session, user):
     token = start_verification(db_session, user)
     db_session.flush()
 
-    assert db_session.query(EmailVerification).filter_by(token_hash=token).count() == 0
+    assert db_session.query(OneTimeToken).filter_by(token_hash=token).count() == 0
     assert _row(db_session, token) is not None
 
 
