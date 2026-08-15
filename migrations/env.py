@@ -30,6 +30,7 @@ config.set_main_option("sqlalchemy.url", database_url)
 # schema. A module missing from this list is invisible to migrations, and its
 # tables silently never get created.
 from app.modules.identity import models as _identity_models  # noqa: F401,E402
+from app.modules.kiosks import models as _kiosks_models  # noqa: F401,E402
 
 target_metadata = Base.metadata
 
