@@ -29,6 +29,7 @@ config.set_main_option("sqlalchemy.url", database_url)
 # Every module's models are imported here so autogenerate sees the whole
 # schema. A module missing from this list is invisible to migrations, and its
 # tables silently never get created.
+from app.modules.billing import models as _billing_models  # noqa: F401,E402
 from app.modules.identity import models as _identity_models  # noqa: F401,E402
 from app.modules.kiosks import models as _kiosks_models  # noqa: F401,E402
 from app.modules.payments import models as _payments_models  # noqa: F401,E402

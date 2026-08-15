@@ -45,6 +45,7 @@ def schema(postgres_url: str) -> str:
     # to register them works only until test collection order changes, and then
     # fails as "relation does not exist" a long way from the cause. This list
     # grows with each new module, exactly like migrations/env.py.
+    import app.modules.billing.models  # noqa: F401
     import app.modules.identity.models  # noqa: F401
     import app.modules.kiosks.models  # noqa: F401
     import app.modules.payments.models  # noqa: F401
