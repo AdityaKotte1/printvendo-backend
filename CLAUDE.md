@@ -91,16 +91,41 @@ Copy `.env.example` to `.env` and fill it. The app refuses to boot with a
   `api-does-not-touch-orm-models` contract, which allows indirect imports —
   calling a service that uses its own models is fine.
 
+- **Kiosk access goes through one `Scope`.** `kiosks.scope.kiosk_scope(db, actor)`
+  is the only place that decides which kiosks someone may touch, and every
+  repository read takes the result as its first argument. There is no unscoped
+  read. Admin is the same resolver returning a wider scope — **not** a second
+  router, which is what `/owner/*` was in the old backend, complete with a
+  "DO NOT LOOSEN" comment where a check should have been.
+- **Out of scope is 404, never 403.** A 403 confirms the kiosk exists, telling
+  one shop owner something true about a competitor's estate. The message is
+  byte-identical to a kiosk that never existed.
+- **A refiller's response type has no money field to populate.** Enforced by
+  `RefillerKioskResponse` rather than by remembering to strip prices.
+- **Two placeholder seams fail in opposite directions, deliberately.**
+  `PlatformOnlyBilling` fails *closed* — no SOLD/SAAS kiosk can go live until
+  the payments module lands, because a misrouted payment is silent and
+  irreversible. `PlatformBand` fails *open* — an unbounded price band lets an
+  owner set a silly price, which is visible and reversible. Do not "fix" either
+  to match the other.
+- **Enum columns use `core.db.EnumText`.** A `Mapped[SomeEnum]` column typed as
+  a bare `String` returns a plain `str` after a database round-trip. These are
+  StrEnums, so `value == Enum.X` still passes and tests stay green, while
+  `value.value` raises `AttributeError`. The annotation must not lie.
+
 ## Status
 
-Foundation and identity. **207 tests passing**, 5 import contracts kept.
+Foundation, identity and kiosks. **446 tests passing**, 6 import contracts kept.
 
 - `app/core/` — config, db, ids, money, errors, crypto, security, notifier
 - `app/modules/identity/` — users, roles, sessions, password/Google/guest
-  sign-in, email verification
-- `app/api/` — `deps` (current_user, role guards) and `student/auth`
-  (`/v1/app/auth/*`, 9 routes)
+  sign-in, email verification, password reset
+- `app/modules/kiosks/` — registry, types, onboarding + LIVE gate, pricing,
+  paper, assignments, consent-based staff invites, and the scope resolver
+- `app/api/` — `deps` (current_user, role guards, kiosk scope),
+  `student/auth`, `student/staff`, `owner/kiosks`, `refiller/kiosks`
+  (33 routes, all declared in `tests/authz/matrix.py`)
 
-Next is sub-project 3, kiosks — registry, `kiosk_type`, onboarding, pricing,
-paper, assignments, and the refiller invite flow. It is the first module with
-per-scope authorisation, so it is where `kiosk_scope` gets built.
+**Not yet built:** printing (sub-project 4, needs Redis), payments + wallet +
+billing (5, needs Razorpay keys — the critical path), ops (6), the admin API
+layer (7), data migration (8), cutover (9).
