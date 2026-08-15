@@ -11,10 +11,12 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -25,6 +27,20 @@ from app.modules.identity.roles import Role
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        # Case-insensitive uniqueness, enforced by the database.
+        #
+        # A plain `unique=True` on email is case-SENSITIVE in Postgres, so
+        # Person@example.com and person@example.com both insert happily. That is
+        # not hypothetical: production has ten such pairs, each with its own
+        # history and its own wallet balance, because the old backend only
+        # compared emails in Python.
+        #
+        # An application-level check cannot close this on its own -- two
+        # concurrent registrations both pass the check and both insert. Only the
+        # index makes it impossible.
+        Index("uq_users_email_lower", text("lower(email)"), unique=True),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
 

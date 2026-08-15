@@ -95,3 +95,19 @@ def test_legacy_id_column_exists_for_migration(db_session):
     db_session.add(user)
     db_session.flush()
     assert user.legacy_id == 4321
+
+
+def test_the_database_refuses_emails_differing_only_by_case(db_session):
+    """Production has ten such pairs, each with its own wallet balance.
+
+    The service layer lowercases before comparing, but that cannot hold on its
+    own: two concurrent registrations both pass the check and both insert. This
+    asserts the *database* refuses it, which is the only version that survives a
+    race or a direct insert.
+    """
+    db_session.add(User(email="Person@Example.com", hashed_password="x"))
+    db_session.flush()
+
+    db_session.add(User(email="person@example.com", hashed_password="y"))
+    with pytest.raises(IntegrityError):
+        db_session.flush()
