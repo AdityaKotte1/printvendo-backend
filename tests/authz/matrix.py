@@ -17,4 +17,17 @@ KNOWN_AUDIENCES = {PUBLIC, STUDENT, OWNER, REFILLER, ADMIN, DEVICE}
 
 MATRIX: dict[tuple[str, str], set[str]] = {
     ("GET", "/health"): {PUBLIC},
+    # ── student auth ────────────────────────────────────────────────────────
+    # /refresh and /logout are PUBLIC because they authenticate with the
+    # refresh cookie rather than a bearer token: reaching them without an
+    # access token is the point.
+    ("POST", "/v1/app/auth/register"): {PUBLIC},
+    ("POST", "/v1/app/auth/login"): {PUBLIC},
+    ("POST", "/v1/app/auth/guest"): {PUBLIC},
+    ("POST", "/v1/app/auth/google"): {PUBLIC},
+    ("POST", "/v1/app/auth/refresh"): {PUBLIC},
+    ("POST", "/v1/app/auth/logout"): {PUBLIC},
+    ("POST", "/v1/app/auth/verify-email"): {PUBLIC},
+    ("POST", "/v1/app/auth/resend-verification"): {STUDENT, OWNER, REFILLER, ADMIN},
+    ("GET", "/v1/app/auth/me"): {STUDENT, OWNER, REFILLER, ADMIN},
 }

@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.core.db import get_session_factory
 from app.core.errors import Forbidden, Unauthorized
+from app.core.notifier import LoggingNotifier, Notifier
 from app.core.security import TokenError, TokenType, decode_token
 from app.modules.identity import repository as repo
 from app.modules.identity.models import User
@@ -49,6 +50,16 @@ def get_db(
         raise
     finally:
         session.close()
+
+
+def get_notifier() -> Notifier:
+    """How out-of-band messages leave the system.
+
+    Overridden in tests, and replaced by a real provider when the ops work
+    lands. Defined here rather than constructed inside a handler so both
+    substitutions are a one-line dependency override.
+    """
+    return LoggingNotifier()
 
 
 def _bearer_token(request: Request) -> str:

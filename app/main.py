@@ -39,6 +39,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     install_error_handlers(app)
 
+    # Imported inside the factory on purpose: at module scope this would make
+    # `import app.main` pull in the whole route tree, and tests/authz builds an
+    # app purely to enumerate routes.
+    from app.api.student import auth as student_auth
+
+    app.include_router(student_auth.router)
+
     @app.get("/health", tags=["meta"])
     def health() -> dict[str, str]:
         return {"status": "ok", "version": VERSION, "env": settings.ENV}
