@@ -40,7 +40,13 @@ def schema(postgres_url: str) -> str:
     nothing -- add a column to a model and every test keeps running against the
     old shape, failing with "column does not exist" a long way from the cause.
     """
-    import app.modules.identity.models  # noqa: F401  (register the mappers)
+    # Every module's models must be imported before create_all, or its tables
+    # are simply absent from the metadata. Relying on a test module's own import
+    # to register them works only until test collection order changes, and then
+    # fails as "relation does not exist" a long way from the cause. This list
+    # grows with each new module, exactly like migrations/env.py.
+    import app.modules.identity.models  # noqa: F401
+    import app.modules.kiosks.models  # noqa: F401
 
     engine = get_engine(postgres_url)
     with engine.begin() as connection:
