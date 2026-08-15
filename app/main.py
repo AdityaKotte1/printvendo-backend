@@ -14,6 +14,8 @@ with uvicorn's factory flag instead:
     uvicorn app.main:create_app --factory
 """
 
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -23,8 +25,31 @@ from app.core.errors import install_error_handlers
 VERSION = "0.1.0"
 
 
+def _configure_logging(settings: Settings) -> None:
+    """Make the application's own loggers audible.
+
+    uvicorn configures its access and error loggers and nothing else, so
+    anything logged by app.* is discarded by the root logger's default WARNING
+    level. That silently broke LoggingNotifier: it claimed a developer could
+    finish an email-verification flow locally by reading the log, and the line
+    never appeared.
+
+    INFO in dev, WARNING elsewhere -- verification tokens are secrets and have
+    no business in a production log.
+    """
+    level = logging.INFO if settings.ENV == "dev" else logging.WARNING
+    app_logger = logging.getLogger("app")
+    app_logger.setLevel(level)
+
+    if not app_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        app_logger.addHandler(handler)
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
+    _configure_logging(settings)
 
     app = FastAPI(title="PrintVendo API", version=VERSION)
     app.state.settings = settings

@@ -44,3 +44,32 @@ def test_error_handlers_are_installed():
     from app.core.errors import AppError
 
     assert AppError in app.exception_handlers
+
+
+def test_app_loggers_are_audible_in_dev(caplog):
+    """LoggingNotifier is useless if app.* logs are swallowed.
+
+    uvicorn only configures its own loggers, so without explicit setup the root
+    logger's WARNING default discards everything the application logs -- and the
+    local email-verification flow becomes impossible to complete.
+    """
+    import logging
+
+    create_app(SETTINGS)
+    assert logging.getLogger("app").level == logging.INFO
+
+    with caplog.at_level(logging.INFO, logger="app.core.notifier"):
+        from app.core.notifier import LoggingNotifier
+
+        LoggingNotifier().send_email_verification(email="a@example.com", token="tok123")
+
+    assert "tok123" in caplog.text
+
+
+def test_app_loggers_are_quiet_outside_dev():
+    """Verification tokens are secrets and must not reach a production log."""
+    import logging
+
+    prod = SETTINGS.model_copy(update={"ENV": "staging"})
+    create_app(prod)
+    assert logging.getLogger("app").level == logging.WARNING
