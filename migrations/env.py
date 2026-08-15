@@ -31,8 +31,28 @@ config.set_main_option("sqlalchemy.url", database_url)
 # tables silently never get created.
 from app.modules.identity import models as _identity_models  # noqa: F401,E402
 from app.modules.kiosks import models as _kiosks_models  # noqa: F401,E402
+from app.modules.payments import models as _payments_models  # noqa: F401,E402
 
 target_metadata = Base.metadata
+
+
+def render_item(type_, obj, autogen_context):
+    """Render custom column types as the plain DDL they compile to.
+
+    Without this, autogenerate writes `app.core.db.EnumText(length=16)` into the
+    migration and does not import `app` -- so the migration dies with NameError
+    the moment it runs.
+
+    Rendering the underlying type is also the right thing independently: a
+    migration is a historical record of a schema change, and it must not depend
+    on application code that can be renamed, moved or deleted later. A migration
+    from a year ago has to keep working against today's codebase.
+    """
+    if type_ == "type" and hasattr(obj, "impl") and hasattr(obj, "length"):
+        # No import needed: script.py.mako always emits `import sqlalchemy as sa`,
+        # and adding it again produces a duplicate the linter rejects.
+        return f"sa.String(length={obj.length})"
+    return False
 
 
 def run_migrations_offline() -> None:
@@ -42,6 +62,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        render_item=render_item,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -58,6 +79,7 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
             compare_type=True,
+            render_item=render_item,
         )
         with context.begin_transaction():
             context.run_migrations()
