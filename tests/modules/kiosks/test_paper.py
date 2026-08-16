@@ -201,11 +201,33 @@ def test_an_estimate_says_so_in_the_log(db_session, kiosk):
 
 
 def test_paper_never_goes_below_empty(db_session, kiosk):
-    """The counter models a physical tray, and a tray cannot hold minus four."""
+    """The counter models a physical tray, and a tray cannot hold minus four.
+
+    Asserts on `used` rather than `sheets_remaining`: the latter already clamps
+    with max(0, ...), so it reports 0 whether or not `used` was clamped -- and a
+    `used` above capacity silently breaks the next partial refill, which
+    computes from capacity minus used.
+    """
     from app.modules.kiosks.paper import consume_paper
 
     consume_paper(db_session, kiosk, predicted_sheets=9999)
+    db_session.flush()
+
+    paper = db_session.get(KioskPaper, kiosk.id)
+    assert paper.used == paper.capacity
     assert sheets_remaining(db_session, kiosk) == 0
+
+
+def test_an_overconsumed_tray_still_refills_correctly(db_session, kiosk):
+    """The consequence of the clamp above: if `used` were allowed past capacity,
+    setting the tray afterwards would compute from a nonsense baseline."""
+    from app.modules.kiosks.paper import consume_paper
+
+    consume_paper(db_session, kiosk, predicted_sheets=9999)
+    db_session.flush()
+
+    set_paper(db_session, kiosk, sheets_left=100, actor_user_id=None)
+    assert sheets_remaining(db_session, kiosk) == 100
 
 
 def test_negative_consumption_is_refused(db_session, kiosk):
