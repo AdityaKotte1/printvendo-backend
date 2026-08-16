@@ -119,3 +119,88 @@ class InviteStaffRequest(BaseModel):
 
 class AcceptInviteRequest(BaseModel):
     token: str
+
+
+# ── devices ─────────────────────────────────────────────────────────────────
+
+
+class DeviceRegisterRequest(BaseModel):
+    """What an agent sends when it is first installed at a kiosk.
+
+    The enrolment code is the credential. Notice what is *absent*: no kiosk id.
+    Which kiosk this machine belongs to is decided by the code, not asserted by
+    the caller.
+    """
+
+    enrolment_code: str
+    device_key: str | None = None
+    agent_version: str | None = None
+    capabilities: str | None = None
+
+
+class DeviceRegisterResponse(BaseModel):
+    """The one and only time the device token is readable."""
+
+    device_key: str
+    token: str
+    kiosk_id: str
+    kiosk_name: str
+
+
+class DeviceHeartbeatRequest(BaseModel):
+    agent_version: str | None = None
+    status: str | None = None
+
+
+class DeviceHeartbeatResponse(BaseModel):
+    kiosk_id: str
+    kiosk_name: str
+    queue_depth: int
+    sheets_remaining: int
+
+
+class DeviceTaskResponse(BaseModel):
+    """A print task, resolved.
+
+    Every value the printer needs is here, already decided. The agent maps them
+    to CUPS flags and nothing more -- it does not parse an options blob, apply
+    defaults, or work anything out. That is what stopped the price charged, the
+    paper deducted and the pages printed from being three different opinions.
+    """
+
+    task_id: str
+    document_id: str
+    filename: str
+    file_url: str
+    page_count: int | None
+    copies: int
+    duplex: bool
+    colour: bool
+    page_range: str | None
+    expected_sheets: int
+    lease_expires_at: datetime | None
+
+
+class DeviceTaskStatusRequest(BaseModel):
+    state: str
+    # CUPS `job-media-sheets-completed`. None means the agent could not tell,
+    # which is a different thing from zero.
+    sheets_used: int | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+
+
+class DeviceStatusResponse(BaseModel):
+    """What an owner sees about the machine in their shop."""
+
+    registered: bool
+    device_key: str | None
+    status: str | None
+    agent_version: str | None
+    last_heartbeat_at: datetime | None
+    online: bool
+
+
+class EnrolmentCodeResponse(BaseModel):
+    code: str
+    expires_at: datetime

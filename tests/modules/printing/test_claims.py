@@ -90,6 +90,28 @@ def test_claiming_sets_a_lease(db_session, kiosk, document):
     assert claimed.lease_expires_at > datetime.now(UTC)
 
 
+def test_the_returned_task_carries_every_value_the_claim_wrote(
+    db_session, kiosk, document
+):
+    """The claim runs as SQL, so a copy of the row already in the session is
+    stale afterwards. SQLAlchemy synchronises part of it back -- `state` and
+    `attempts` arrive updated while `claimed_at` and `lease_expires_at` did not
+    -- which is worse than none of it synchronising, because the object looks
+    half-claimed and a caller reading its lease deadline silently gets None.
+
+    Found by a device-reporting test, not by this file: every assertion here
+    happened to read an attribute that survived.
+    """
+    task = _task(db_session, kiosk, document)
+    claimed = claim_next_task(db_session, kiosk_id=kiosk.id)
+
+    assert claimed is task, "the same identity-mapped object, hence the hazard"
+    assert claimed.state is TaskState.SENT_TO_DEVICE
+    assert claimed.attempts == 1
+    assert claimed.claimed_at is not None
+    assert claimed.lease_expires_at is not None
+
+
 def test_claiming_counts_the_attempt(db_session, kiosk, document):
     _task(db_session, kiosk, document)
     assert claim_next_task(db_session, kiosk_id=kiosk.id).attempts == 1

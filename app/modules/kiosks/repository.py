@@ -16,7 +16,12 @@ from app.core.errors import NotFound
 from app.core.ids import IdPrefix, InvalidId, parse_id
 from app.modules.identity import User
 from app.modules.kiosks.enums import AssignmentRole
-from app.modules.kiosks.models import Kiosk, KioskAssignment, PaperRefillLog
+from app.modules.kiosks.models import (
+    Kiosk,
+    KioskAssignment,
+    KioskDevice,
+    PaperRefillLog,
+)
 from app.modules.kiosks.scope import Scope
 
 NO_SUCH_KIOSK = "That kiosk does not exist."
@@ -86,6 +91,20 @@ def resolve_staff_user(db: Session, kiosk: Kiosk, public_id: str) -> User:
     if user is None:
         raise NotFound(NO_SUCH_STAFF)
     return user
+
+
+def kiosk_of_device(db: Session, device: KioskDevice) -> Kiosk:
+    """The kiosk this machine belongs to.
+
+    Takes no `Scope`, and takes a device rather than an id -- which is what
+    keeps it from being a way to read any kiosk. A device token *is* a scope of
+    exactly one kiosk, and the only way to hold a KioskDevice is to have
+    presented that token.
+    """
+    kiosk = db.get(Kiosk, device.kiosk_id)
+    if kiosk is None:
+        raise NotFound(NO_SUCH_KIOSK)
+    return kiosk
 
 
 def owner_of(db: Session, kiosk: Kiosk) -> User | None:

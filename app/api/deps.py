@@ -23,11 +23,16 @@ from app.modules.identity.roles import Role
 from app.modules.kiosks import (
     BandSource,
     BillingCheck,
+    Kiosk,
+    KioskDevice,
     PlatformBand,
     Scope,
+    authenticate_device,
+    consume_paper,
     kiosk_scope,
 )
 from app.modules.payments.gate import GateBilling
+from app.modules.printing import DocumentStore
 
 NOT_SIGNED_IN = "You need to sign in to do that."
 NOT_ALLOWED = "You do not have access to that."
@@ -139,6 +144,64 @@ def get_billing_check() -> BillingCheck:
     while unable to take a rupee.
     """
     return GateBilling()
+
+
+def get_current_device(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+) -> KioskDevice:
+    """The kiosk machine making this request.
+
+    The token *is* the kiosk. Nothing the device sends names one, so there is no
+    printer id in a URL for a handler to trust -- which is how one shop's Pi
+    could fetch another shop's job file in the old backend.
+    """
+    return authenticate_device(db, request.headers.get("X-Device-Token"))
+
+
+CurrentDevice = Annotated[KioskDevice, Depends(get_current_device)]
+
+
+def get_document_store() -> DocumentStore:
+    """Where uploaded files live. A dependency so a test can point it at a
+    temporary directory without touching the environment."""
+    return DocumentStore.from_settings()
+
+
+class KioskPaperLedger:
+    """Deducts a finished print's paper from **one** kiosk's tray.
+
+    The adapter lives here, at the composition root, rather than in either
+    module: printing declares what it needs (`PaperLedger`), kiosks owns the
+    tray, and neither has to import the other.
+
+    It is constructed around the kiosk whose device is reporting, so paper can
+    only ever leave that tray. The id check can never fire through the routes as
+    written -- the task was fetched for this kiosk -- which is exactly why it is
+    cheap to keep: it is what makes that still true after the next change.
+    """
+
+    def __init__(self, kiosk: Kiosk) -> None:
+        self._kiosk = kiosk
+
+    def consume(
+        self,
+        db: Session,
+        kiosk_id: int,
+        *,
+        predicted_sheets: int,
+        actual_sheets: int | None,
+        reference: str,
+    ) -> None:
+        if kiosk_id != self._kiosk.id:
+            raise Forbidden("That print job belongs to a different kiosk.")
+        consume_paper(
+            db,
+            self._kiosk,
+            predicted_sheets=predicted_sheets,
+            actual_sheets=actual_sheets,
+            reference=reference,
+        )
 
 
 def get_band_source() -> BandSource:

@@ -45,8 +45,28 @@ allow_indirect_imports = True
 [importlinter:contract:modules-are-independent]
 name = bounded contexts do not reach into each other
 type = independence
+# An independence contract over ONE module is vacuously true: there are no pairs
+# to check, so it passed while proving nothing. It listed only identity until
+# printing landed. Both are leaf contexts -- neither imports another module --
+# so the pair is a real assertion. kiosks cannot join: it legitimately imports
+# identity to resolve a User, which the contract below bounds instead.
 modules =
     app.modules.identity
+    app.modules.printing
+
+[importlinter:contract:printing-is-self-contained]
+name = printing depends on no other bounded context
+type = forbidden
+# Printing needs paper deducted, and paper belongs to kiosks. Rather than import
+# it, printing declares a PaperLedger protocol that the api layer implements
+# over kiosks.paper. This contract is what stops that seam being "simplified"
+# into a direct import later, which would tie the print path to the tray.
+source_modules =
+    app.modules.printing
+forbidden_modules =
+    app.modules.kiosks
+    app.modules.payments
+    app.modules.billing
 
 [importlinter:contract:layers]
 name = api sits above modules sits above core

@@ -6,6 +6,20 @@ the contract because callers must annotate what the services return; the
 layer breaks the import contracts.
 """
 
+from app.modules.kiosks.devices import (
+    ENROLMENT_LIFETIME,
+    HEARTBEAT_WINDOW,
+    IssuedDevice,
+    IssuedEnrolment,
+    authenticate_device,
+    device_of,
+    is_online,
+    issue_enrolment_code,
+    record_heartbeat,
+    register_device,
+    revoke_device,
+    rotate_token,
+)
 from app.modules.kiosks.enums import (
     AssignmentRole,
     DeviceStatus,
@@ -20,6 +34,7 @@ from app.modules.kiosks.onboarding import (
     move_to,
     reconcile_billing_state,
 )
+from app.modules.kiosks.paper import consume_paper, sheets_remaining
 from app.modules.kiosks.pricing import (
     BandSource,
     PlatformBand,
@@ -31,10 +46,14 @@ from app.modules.kiosks.pricing import (
 from app.modules.kiosks.scope import Scope, kiosk_scope
 
 __all__ = [
+    "ENROLMENT_LIFETIME",
+    "HEARTBEAT_WINDOW",
     "AssignmentRole",
     "BandSource",
     "BillingCheck",
     "DeviceStatus",
+    "IssuedDevice",
+    "IssuedEnrolment",
     "Kiosk",
     "KioskDevice",
     "KioskPaper",
@@ -44,11 +63,21 @@ __all__ = [
     "PlatformOnlyBilling",
     "PriceBand",
     "Scope",
+    "authenticate_device",
+    "consume_paper",
+    "device_of",
     "effective_prices",
+    "is_online",
     "is_selling",
+    "issue_enrolment_code",
     "kiosk_scope",
     "move_to",
     "read_pricing",
     "reconcile_billing_state",
+    "record_heartbeat",
+    "register_device",
+    "revoke_device",
+    "rotate_token",
     "set_pricing",
+    "sheets_remaining",
 ]

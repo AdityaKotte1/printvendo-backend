@@ -147,6 +147,40 @@ class KioskDevice(Base):
     kiosk: Mapped[Kiosk] = relationship(back_populates="device")
 
 
+class DeviceEnrolment(Base):
+    """A one-time code that lets an agent claim a kiosk.
+
+    Without this, `POST /v1/device/register` would be an open door: anyone who
+    guessed a kiosk id could attach their own machine to a shop and start
+    pulling other people's documents.
+
+    The operator generates a code for one kiosk, SSHes into that Pi, and the
+    agent spends it once. What comes back is a device token, so the long-lived
+    credential is never typed, pasted, or read by a person -- and the code that
+    was typed is worthless a moment later.
+    """
+
+    __tablename__ = "device_enrolments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kiosk_id: Mapped[int] = mapped_column(
+        ForeignKey("kiosks.id", ondelete="CASCADE"), index=True
+    )
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class KioskPaper(Base):
     """How much paper is in the tray, and the warning throttle state.
 

@@ -25,6 +25,8 @@ from app.api.deps import (
     get_notifier,
 )
 from app.api.schemas import (
+    DeviceStatusResponse,
+    EnrolmentCodeResponse,
     InviteStaffRequest,
     OwnerKioskResponse,
     PaperResponse,
@@ -43,9 +45,13 @@ from app.modules.kiosks import (
     BillingCheck,
     Kiosk,
     OnboardingStage,
+    device_of,
+    is_online,
     is_selling,
+    issue_enrolment_code,
     move_to,
     read_pricing,
+    revoke_device,
     set_pricing,
 )
 from app.modules.kiosks import repository as kiosk_repo
@@ -283,3 +289,76 @@ def remove_staff(
 
     target = kiosk_repo.resolve_staff_user(db, kiosk, user_id)
     unassign(db, kiosk, user_id=target.id, role=assignment_role)
+
+
+# ── the machine in the shop ─────────────────────────────────────────────────
+
+
+@router.get("/{kiosk_id}/device", response_model=DeviceStatusResponse)
+def device_status(
+    kiosk_id: str,
+    scope: KioskScope,
+    db: Annotated[Session, Depends(get_db)],
+) -> DeviceStatusResponse:
+    """What the owner needs to answer "is my printer working?".
+
+    `online` is derived from the last heartbeat rather than read from the status
+    column: a Pi whose power was pulled never gets to say it went away, and the
+    old backend's status stayed ONLINE until somebody noticed.
+    """
+    kiosk = kiosk_repo.get_kiosk(db, scope, kiosk_id)
+    device = device_of(db, kiosk)
+
+    if device is None:
+        return DeviceStatusResponse(
+            registered=False,
+            device_key=None,
+            status=None,
+            agent_version=None,
+            last_heartbeat_at=None,
+            online=False,
+        )
+
+    return DeviceStatusResponse(
+        registered=True,
+        device_key=device.device_key,
+        status=device.status.value,
+        agent_version=device.agent_version,
+        last_heartbeat_at=device.last_heartbeat_at,
+        online=is_online(device),
+    )
+
+
+@router.post("/{kiosk_id}/device/enrol", response_model=EnrolmentCodeResponse)
+def enrol_device(
+    kiosk_id: str,
+    user: CurrentUser,
+    scope: KioskScope,
+    db: Annotated[Session, Depends(get_db)],
+) -> EnrolmentCodeResponse:
+    """Mint the one-time code an installer types into the Pi.
+
+    Issued for one kiosk by somebody who already had the right to touch that
+    kiosk, so `/v1/device/register` -- which has to be public, because a machine
+    being installed has no token yet -- cannot be used to attach a machine to
+    somebody else's shop.
+    """
+    kiosk = kiosk_repo.get_kiosk(db, scope, kiosk_id)
+    issued = issue_enrolment_code(db, kiosk, created_by_user_id=user.id)
+
+    return EnrolmentCodeResponse(code=issued.code, expires_at=issued.expires_at)
+
+
+@router.delete("/{kiosk_id}/device", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_kiosk_device(
+    kiosk_id: str,
+    scope: KioskScope,
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    """Detach the machine. Its token stops working immediately.
+
+    This is what an owner does when a Pi is swapped, returned or stolen -- the
+    old backend had no way to do it at all.
+    """
+    kiosk = kiosk_repo.get_kiosk(db, scope, kiosk_id)
+    revoke_device(db, kiosk)

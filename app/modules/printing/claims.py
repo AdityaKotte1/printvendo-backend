@@ -83,7 +83,16 @@ def claim_next_task(
     if claimed_id is None:
         return None
 
-    return db.get(PrintTask, claimed_id)
+    task = db.get(PrintTask, claimed_id)
+
+    # The UPDATE ran as SQL, so a copy of this row already in the session is
+    # stale. SQLAlchemy synchronises *some* of it back -- `state` and `attempts`
+    # arrive updated -- while `claimed_at` and `lease_expires_at` do not, which
+    # is worse than nothing synchronising at all: the object looks half-claimed
+    # and a caller reading its lease deadline gets None. Refresh so what is
+    # returned is what is in the database.
+    db.refresh(task)
+    return task
 
 
 def renew_lease(

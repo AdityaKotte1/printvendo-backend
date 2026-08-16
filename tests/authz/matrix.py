@@ -50,6 +50,12 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     ("PUT", "/v1/owner/kiosks/{kiosk_id}/paper"): {OWNER, ADMIN},
     ("POST", "/v1/owner/kiosks/{kiosk_id}/paper/reset"): {OWNER, ADMIN},
     ("GET", "/v1/owner/kiosks/{kiosk_id}/refill-logs"): {OWNER, ADMIN},
+    # The machine in the shop. Enrolling one mints a credential, so it is an
+    # owner/admin action on a kiosk they already hold -- which is what makes the
+    # public /v1/device/register safe.
+    ("GET", "/v1/owner/kiosks/{kiosk_id}/device"): {OWNER, ADMIN},
+    ("POST", "/v1/owner/kiosks/{kiosk_id}/device/enrol"): {OWNER, ADMIN},
+    ("DELETE", "/v1/owner/kiosks/{kiosk_id}/device"): {OWNER, ADMIN},
     ("GET", "/v1/owner/kiosks/{kiosk_id}/staff"): {OWNER, ADMIN},
     ("POST", "/v1/owner/kiosks/{kiosk_id}/staff/invite"): {OWNER, ADMIN},
     ("DELETE", "/v1/owner/kiosks/{kiosk_id}/staff/{user_id}"): {OWNER, ADMIN},
@@ -62,4 +68,15 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     ("POST", "/v1/refiller/kiosks/{kiosk_id}/paper/reset"): {REFILLER, ADMIN},
     ("POST", "/v1/refiller/kiosks/{kiosk_id}/paper/out-of-paper"): {REFILLER, ADMIN},
     ("GET", "/v1/refiller/kiosks/{kiosk_id}/refill-logs"): {REFILLER, ADMIN},
+    # ── device ──────────────────────────────────────────────────────────────
+    # /register is PUBLIC by necessity: a machine being installed has no token
+    # yet. The enrolment code it must present is single-use, short-lived, and
+    # was issued for one kiosk by somebody who already had access to it.
+    ("POST", "/v1/device/register"): {PUBLIC},
+    # Everything else authenticates with X-Device-Token, and that token *is* the
+    # kiosk -- no device route takes a kiosk id, so there is nothing to confuse.
+    ("POST", "/v1/device/heartbeat"): {DEVICE},
+    ("POST", "/v1/device/tasks/next"): {DEVICE},
+    ("GET", "/v1/device/tasks/{task_id}/file"): {DEVICE},
+    ("POST", "/v1/device/tasks/{task_id}/status"): {DEVICE},
 }
