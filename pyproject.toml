@@ -17,6 +17,11 @@ dependencies = [
     "cryptography>=43.0",
     "slowapi>=0.1.9",
     "google-auth>=2.35",
+    # PDF structure parsing at upload time. libqpdf, so it reads the structure
+    # without rendering -- milliseconds, and nothing to execute.
+    "pikepdf>=9.4",
+    # Photo printing: images composed onto an A4 canvas server-side.
+    "pillow>=11.0",
 ]
 
 [project.optional-dependencies]

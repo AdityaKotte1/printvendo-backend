@@ -40,8 +40,33 @@ class Settings(BaseSettings):
     VAPID_SUBJECT: str = ""
     BREVO_API_KEY: str = ""
 
+    # Ghostscript is named `gs` on Linux and `gswin64c` on Windows, and this
+    # value is only a hint: app.modules.printing.pdfs falls back to the known
+    # names when what is configured is not on PATH, so one .env works on the
+    # developer's machine and on the VPS.
     GHOSTSCRIPT_PATH: str = "gs"
+    GHOSTSCRIPT_TIMEOUT_SECONDS: int = 120
     STORAGE_ROOT: str = "./storage"
+
+    # Upload caps. Both are abuse guards rather than product limits -- what a
+    # student can actually print is bounded by the kiosk's paper and by what
+    # they are willing to pay. The size cap matches the old backend's 64MB so
+    # no existing upload becomes newly impossible at cutover.
+    MAX_UPLOAD_MB: int = 64
+    MAX_DOCUMENT_PAGES: int = 2000
+
+    # Normalising a small PDF costs more than it saves, so it is skipped below
+    # this size. 300dpi is print quality; going lower shows on paper.
+    PDF_NORMALISE_MIN_BYTES: int = 8 * 1024 * 1024
+    PDF_NORMALISE_DPI: int = 300
+
+    # How long an uploaded file is kept. The row outlives the file so a
+    # student's order history does not develop holes -- see DocumentState.
+    FILE_RETENTION_DAYS: int = 7
+
+    @property
+    def max_upload_bytes(self) -> int:
+        return self.MAX_UPLOAD_MB * 1024 * 1024
 
     CORS_ORIGINS: str = ""
 
