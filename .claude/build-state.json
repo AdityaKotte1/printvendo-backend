@@ -1,9 +1,26 @@
 {
   "verified_at": "2026-08-16",
-  "tests": 756,
-  "contracts": 7,
+  "tests": 811,
+  "contracts": 8,
   "ruff": "clean",
-  "done": ["core", "identity", "kiosks", "payments", "billing", "printing"],
-  "next": "orders",
-  "remaining": ["orders", "wallet", "razorpay", "ops", "admin-api", "migration", "agent", "cutover"]
+  "done": [
+    "core",
+    "identity",
+    "kiosks",
+    "payments",
+    "billing",
+    "printing",
+    "orders"
+  ],
+  "next": "wallet",
+  "remaining": [
+    "wallet",
+    "razorpay",
+    "ops",
+    "admin-api",
+    "device-ws",
+    "migration",
+    "agent",
+    "cutover"
+  ]
 }

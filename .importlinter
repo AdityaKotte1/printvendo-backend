@@ -68,6 +68,23 @@ forbidden_modules =
     app.modules.payments
     app.modules.billing
 
+[importlinter:contract:orders-uses-surfaces-not-tables]
+name = orders spans contexts through their surfaces, never their tables
+type = forbidden
+# Orders is the aggregate, so unlike printing it legitimately depends on kiosks,
+# payments and printing. What it must not do is write their rows: the old
+# backend's three core tables were created and mutated from every router that
+# felt like it, which is how their meanings drifted apart. Orders asks printing
+# to enqueue; it does not construct a PrintTask.
+source_modules =
+    app.modules.orders
+forbidden_modules =
+    app.modules.identity.models
+    app.modules.kiosks.models
+    app.modules.payments.models
+    app.modules.billing.models
+allow_indirect_imports = True
+
 [importlinter:contract:layers]
 name = api sits above modules sits above core
 type = layers

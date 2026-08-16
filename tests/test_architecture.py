@@ -58,7 +58,7 @@ def test_import_contracts_hold():
 # an .importlinter with an unreadable root_package, or with contracts typo'd
 # out of existence, still exits 0 -- a green build that proves nothing. A
 # vaguer assertion would not notice a contract quietly disappearing.
-EXPECTED_CONTRACTS = 7
+EXPECTED_CONTRACTS = 8
 
 
 def test_every_contract_is_actually_evaluated():

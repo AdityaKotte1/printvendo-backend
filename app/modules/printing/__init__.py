@@ -29,6 +29,7 @@ from app.modules.printing.documents import (
     printable_key,
     purge_expired_files,
 )
+from app.modules.printing.enqueue import committed_sheets, enqueue_task
 from app.modules.printing.models import (
     TERMINAL_TASK_STATES,
     Document,
@@ -72,8 +73,10 @@ __all__ = [
     "TaskState",
     "Workload",
     "claim_next_task",
+    "committed_sheets",
     "create_document",
     "delete_document",
+    "enqueue_task",
     "format_page_range",
     "inspect_pdf",
     "normalise_document",
