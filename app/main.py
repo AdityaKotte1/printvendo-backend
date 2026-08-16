@@ -72,10 +72,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from app.api.owner import kiosks as owner_kiosks
     from app.api.refiller import kiosks as refiller_kiosks
     from app.api.student import auth as student_auth
+    from app.api.student import documents as student_documents
     from app.api.student import staff as student_staff
 
     app.include_router(student_auth.router)
     app.include_router(student_staff.router)
+    app.include_router(student_documents.router)
     app.include_router(owner_kiosks.router)
     app.include_router(refiller_kiosks.router)
     app.include_router(device_agent.router)

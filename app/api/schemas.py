@@ -204,3 +204,20 @@ class DeviceStatusResponse(BaseModel):
 class EnrolmentCodeResponse(BaseModel):
     code: str
     expires_at: datetime
+
+
+class DocumentResponse(BaseModel):
+    """A file a student uploaded.
+
+    No price. What a print costs depends on the kiosk it goes to and the options
+    chosen, and that calculation lives in one place -- the order. A price here
+    would be a second opinion, and the old backend's two opinions are why a
+    student could be charged for one thing and handed another.
+    """
+
+    id: str
+    filename: str
+    page_count: int | None
+    byte_size: int | None
+    state: str
+    created_at: datetime

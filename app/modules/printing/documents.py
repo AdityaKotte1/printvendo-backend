@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.errors import NotFound
+from app.core.errors import Conflict, NotFound
 from app.modules.printing.models import (
     TERMINAL_TASK_STATES,
     Document,
@@ -106,6 +106,66 @@ def normalise_document(
     document.normalised_path = key
     db.add(document)
     return True
+
+
+def normalise_pending(
+    db: Session,
+    store: DocumentStore,
+    *,
+    limit: int = 20,
+) -> list[Document]:
+    """Shrink documents that are worth shrinking and have not been yet.
+
+    A sweep rather than work scheduled after each upload. The alternative --
+    a background task fired from the request -- needs its own database session
+    because the request's is closed by then, and that is a class of bug worth
+    not having for an optimisation. Nothing waits on this: `original_path` is
+    always printable, so a device that fetches a file before the sweep runs
+    gets something correct.
+    """
+    candidates = list(
+        db.execute(
+            select(Document)
+            .where(
+                Document.state == DocumentState.READY,
+                Document.normalised_path.is_(None),
+                Document.original_path.is_not(None),
+            )
+            .order_by(Document.created_at)
+            .limit(limit)
+        ).scalars()
+    )
+
+    return [
+        document
+        for document in candidates
+        if normalise_document(db, store, document)
+    ]
+
+
+def delete_document(db: Session, store: DocumentStore, document: Document) -> None:
+    """Remove a document a student no longer wants.
+
+    Refused while anything is still waiting to print it. Deleting the file out
+    from under a queued task is the "paid and got nothing" failure, and a
+    student tidying their list must not be able to cause it.
+    """
+    waiting = db.execute(
+        select(PrintTask.id).where(
+            PrintTask.document_id == document.id,
+            PrintTask.state.not_in(TERMINAL_TASK_STATES),
+        )
+    ).first()
+    if waiting is not None:
+        raise Conflict(
+            "That document is still waiting to print. It can be deleted once "
+            "the job has finished."
+        )
+
+    for key in (document.original_path, document.normalised_path):
+        if key:
+            store.delete(key)
+    db.delete(document)
 
 
 def purge_expired_files(

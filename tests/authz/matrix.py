@@ -38,6 +38,13 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     # Anyone signed in may accept an invitation addressed to them; the token is
     # what authorises it, and the service checks it matches their address.
     ("POST", "/v1/app/staff/accept-invite"): {STUDENT, OWNER, REFILLER, ADMIN},
+    # ── student documents ───────────────────────────────────────────────────
+    # A guest counts as a student: printing without signing up is a carried
+    # feature, and a guest account holds the same STUDENT role.
+    ("POST", "/v1/app/documents"): {STUDENT, OWNER, REFILLER, ADMIN},
+    ("POST", "/v1/app/documents/photo-layout"): {STUDENT, OWNER, REFILLER, ADMIN},
+    ("GET", "/v1/app/documents"): {STUDENT, OWNER, REFILLER, ADMIN},
+    ("DELETE", "/v1/app/documents/{document_id}"): {STUDENT, OWNER, REFILLER, ADMIN},
     # ── owner ───────────────────────────────────────────────────────────────
     # ADMIN appears alongside OWNER throughout because admin is not a separate
     # router here -- it is the same routes with a wider kiosk scope.

@@ -23,7 +23,9 @@ from app.modules.printing.claims import (
 )
 from app.modules.printing.documents import (
     create_document,
+    delete_document,
     normalise_document,
+    normalise_pending,
     printable_key,
     purge_expired_files,
 )
@@ -43,6 +45,7 @@ from app.modules.printing.options import (
     workload,
 )
 from app.modules.printing.pdfs import PdfFacts, inspect_pdf
+from app.modules.printing.photos import PhotoLayout, parse_layout, render_layout
 from app.modules.printing.storage import DocumentStore, StorageArea
 from app.modules.printing.tasks import (
     PaperLedger,
@@ -62,6 +65,7 @@ __all__ = [
     "DocumentStore",
     "PaperLedger",
     "PdfFacts",
+    "PhotoLayout",
     "PrintOptions",
     "PrintTask",
     "StorageArea",
@@ -69,9 +73,12 @@ __all__ = [
     "Workload",
     "claim_next_task",
     "create_document",
+    "delete_document",
     "format_page_range",
     "inspect_pdf",
     "normalise_document",
+    "normalise_pending",
+    "parse_layout",
     "parse_page_range",
     "printable_key",
     "purge_expired_files",
@@ -80,6 +87,7 @@ __all__ = [
     "report_blocked",
     "report_failed",
     "report_printed",
+    "render_layout",
     "requeue_expired",
     "start_printing",
     "workload",

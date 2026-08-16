@@ -10,6 +10,7 @@ from app.core.errors import BadRequest, NotFound
 from app.modules.printing.documents import (
     create_document,
     normalise_document,
+    normalise_pending,
     printable_key,
     purge_expired_files,
 )
@@ -319,3 +320,60 @@ def test_purging_twice_is_harmless(db_session, store, user):
     again = purge_expired_files(db_session, store, older_than=timedelta(days=7))
 
     assert again == []
+
+
+# ── the normalisation sweep ─────────────────────────────────────────────────
+
+
+def test_the_sweep_skips_documents_not_worth_shrinking(db_session, store, user):
+    create_document(
+        db_session, store, user_id=user.id, filename="a.pdf", data=make_pdf(1)
+    )
+
+    assert normalise_pending(db_session, store) == []
+
+
+def test_the_sweep_shrinks_a_large_document(db_session, store, user, monkeypatch):
+    from PIL import Image
+
+    noise = Image.effect_noise((1600, 2200), 96).convert("RGB")
+    buffer = io.BytesIO()
+    noise.save(buffer, format="PDF", resolution=600.0)
+    document = create_document(
+        db_session, store, user_id=user.id, filename="photo.pdf", data=buffer.getvalue()
+    )
+    monkeypatch.setattr(
+        "app.modules.printing.documents.should_normalise", lambda path: True
+    )
+
+    assert normalise_pending(db_session, store) == [document]
+    assert document.normalised_path is not None
+
+
+def test_the_sweep_does_not_redo_work(db_session, store, user, monkeypatch):
+    """It runs on a schedule over the same rows, and Ghostscript is expensive."""
+    from PIL import Image
+
+    noise = Image.effect_noise((1600, 2200), 96).convert("RGB")
+    buffer = io.BytesIO()
+    noise.save(buffer, format="PDF", resolution=600.0)
+    create_document(
+        db_session, store, user_id=user.id, filename="photo.pdf", data=buffer.getvalue()
+    )
+    monkeypatch.setattr(
+        "app.modules.printing.documents.should_normalise", lambda path: True
+    )
+
+    normalise_pending(db_session, store)
+    assert normalise_pending(db_session, store) == []
+
+
+def test_the_sweep_ignores_documents_whose_file_is_gone(db_session, store, user):
+    document = create_document(
+        db_session, store, user_id=user.id, filename="a.pdf", data=make_pdf(1)
+    )
+    document.state = DocumentState.EXPIRED
+    document.original_path = None
+    db_session.flush()
+
+    assert normalise_pending(db_session, store) == []
