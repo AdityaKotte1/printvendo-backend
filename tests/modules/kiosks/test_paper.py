@@ -148,3 +148,89 @@ def test_a_kiosk_with_no_paper_row_gets_one(db_session):
     db_session.flush()
 
     assert sheets_remaining(db_session, k) == 250
+
+
+# ── consuming paper after a print ───────────────────────────────────────────
+
+
+def test_printing_deducts_the_predicted_sheets(db_session, kiosk):
+    from app.modules.kiosks.paper import consume_paper
+
+    before = sheets_remaining(db_session, kiosk)  # 50
+    consume_paper(db_session, kiosk, predicted_sheets=10)
+    assert sheets_remaining(db_session, kiosk) == before - 10
+
+
+def test_the_devices_actual_count_wins_over_the_prediction(db_session, kiosk):
+    """The tray is emptied by what the printer pulled, not what we guessed."""
+    from app.modules.kiosks.paper import consume_paper
+
+    before = sheets_remaining(db_session, kiosk)
+    consume_paper(db_session, kiosk, predicted_sheets=10, actual_sheets=13)
+    assert sheets_remaining(db_session, kiosk) == before - 13
+
+
+def test_a_failed_print_still_deducts_what_it_used(db_session, kiosk):
+    """The old backend deducted zero unless the job reached PRINTED, so a jam
+    after three sheets left the counter lying about the tray."""
+    from app.modules.kiosks.paper import consume_paper
+
+    before = sheets_remaining(db_session, kiosk)
+    consume_paper(db_session, kiosk, predicted_sheets=10, actual_sheets=3)
+    assert sheets_remaining(db_session, kiosk) == before - 3
+
+
+def test_a_mismatch_is_recorded_not_absorbed(db_session, kiosk):
+    """A printer that consistently overshoots is reporting a real problem --
+    usually a driver ignoring duplex."""
+    from app.modules.kiosks.paper import consume_paper
+
+    consume_paper(db_session, kiosk, predicted_sheets=10, actual_sheets=20)
+    db_session.flush()
+
+    note = _logs(db_session, kiosk)[-1].note
+    assert "20" in note and "expected 10" in note
+
+
+def test_an_estimate_says_so_in_the_log(db_session, kiosk):
+    from app.modules.kiosks.paper import consume_paper
+
+    consume_paper(db_session, kiosk, predicted_sheets=4)
+    db_session.flush()
+    assert "estimated" in _logs(db_session, kiosk)[-1].note
+
+
+def test_paper_never_goes_below_empty(db_session, kiosk):
+    """The counter models a physical tray, and a tray cannot hold minus four."""
+    from app.modules.kiosks.paper import consume_paper
+
+    consume_paper(db_session, kiosk, predicted_sheets=9999)
+    assert sheets_remaining(db_session, kiosk) == 0
+
+
+def test_negative_consumption_is_refused(db_session, kiosk):
+    from app.modules.kiosks.paper import consume_paper
+
+    with pytest.raises(BadRequest):
+        consume_paper(db_session, kiosk, predicted_sheets=-1)
+
+
+def test_every_print_is_logged(db_session, kiosk):
+    from app.modules.kiosks.paper import consume_paper
+
+    before = len(_logs(db_session, kiosk))
+    consume_paper(db_session, kiosk, predicted_sheets=2, reference="tsk_abc")
+    db_session.flush()
+
+    logs = _logs(db_session, kiosk)
+    assert len(logs) == before + 1
+    assert "tsk_abc" in logs[-1].note
+
+
+def test_a_kiosk_without_enough_paper_cannot_take_the_job(db_session, kiosk):
+    """Checked before the order is accepted, so nobody is charged for a job the
+    kiosk cannot finish."""
+    from app.modules.kiosks.paper import can_print
+
+    assert can_print(db_session, kiosk, sheets_needed=50) is True
+    assert can_print(db_session, kiosk, sheets_needed=51) is False

@@ -150,3 +150,68 @@ def mark_out_of_paper(db: Session, kiosk: Kiosk, *, actor_user_id: int | None) -
     return set_paper(
         db, kiosk, sheets_left=0, actor_user_id=actor_user_id, note="reported empty"
     )
+
+
+def consume_paper(
+    db: Session,
+    kiosk: Kiosk,
+    *,
+    predicted_sheets: int,
+    actual_sheets: int | None = None,
+    reference: str | None = None,
+) -> int:
+    """Deduct paper after a print, preferring what the device actually used.
+
+    `predicted_sheets` is what workload() expected. `actual_sheets` is what the
+    printer reported (CUPS `job-media-sheets-completed`), when it can say.
+
+    Actual wins. The backend being replaced always used its own estimate and
+    only deducted on success, so a job that jammed after three sheets deducted
+    zero and the counter drifted from the physical tray -- which is how a kiosk
+    ends up reporting paper while being empty.
+
+    A difference between the two is recorded rather than absorbed. A printer
+    that consistently uses more sheets than predicted is telling you something,
+    usually that its driver is ignoring the duplex request.
+
+    Returns sheets remaining.
+    """
+    used = actual_sheets if actual_sheets is not None else predicted_sheets
+    if used < 0:
+        raise BadRequest("A print cannot consume a negative number of sheets.")
+
+    paper = _paper(db, kiosk)
+    used_before = paper.used
+
+    # Never below zero and never past the tray's size: the counter is a model of
+    # a physical tray, and a tray cannot hold minus four sheets.
+    paper.used = min(paper.capacity, used_before + used)
+
+    note = f"printed {used} sheet{'s' if used != 1 else ''}"
+    if reference:
+        note = f"{note} for {reference}"
+    if actual_sheets is not None and actual_sheets != predicted_sheets:
+        note = f"{note} (expected {predicted_sheets})"
+    elif actual_sheets is None:
+        note = f"{note} (estimated; device did not report)"
+
+    _log(
+        db,
+        kiosk,
+        paper,
+        sheets_added=-used,
+        used_before=used_before,
+        actor_user_id=None,
+        note=note,
+    )
+    db.add(paper)
+    return max(0, paper.capacity - paper.used)
+
+
+def can_print(db: Session, kiosk: Kiosk, *, sheets_needed: int) -> bool:
+    """Whether this kiosk has enough paper for a job of this size.
+
+    Checked before an order is accepted, so a student is not charged for a job
+    the kiosk cannot finish.
+    """
+    return sheets_remaining(db, kiosk) >= sheets_needed
