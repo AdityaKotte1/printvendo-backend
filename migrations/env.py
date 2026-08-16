@@ -33,6 +33,7 @@ from app.modules.billing import models as _billing_models  # noqa: F401,E402
 from app.modules.identity import models as _identity_models  # noqa: F401,E402
 from app.modules.kiosks import models as _kiosks_models  # noqa: F401,E402
 from app.modules.payments import models as _payments_models  # noqa: F401,E402
+from app.modules.printing import models as _printing_models  # noqa: F401,E402
 
 target_metadata = Base.metadata
 

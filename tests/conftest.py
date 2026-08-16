@@ -49,6 +49,7 @@ def schema(postgres_url: str) -> str:
     import app.modules.identity.models  # noqa: F401
     import app.modules.kiosks.models  # noqa: F401
     import app.modules.payments.models  # noqa: F401
+    import app.modules.printing.models  # noqa: F401
 
     engine = get_engine(postgres_url)
     with engine.begin() as connection:

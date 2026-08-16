@@ -113,19 +113,73 @@ Copy `.env.example` to `.env` and fill it. The app refuses to boot with a
   StrEnums, so `value == Enum.X` still passes and tests stay green, while
   `value.value` raises `AttributeError`. The annotation must not lie.
 
-## Status
+## How this work is done
 
-Foundation, identity and kiosks. **446 tests passing**, 6 import contracts kept.
+Read this before continuing the build. It is the method, not a preference.
 
-- `app/core/` — config, db, ids, money, errors, crypto, security, notifier
-- `app/modules/identity/` — users, roles, sessions, password/Google/guest
-  sign-in, email verification, password reset
-- `app/modules/kiosks/` — registry, types, onboarding + LIVE gate, pricing,
-  paper, assignments, consent-based staff invites, and the scope resolver
-- `app/api/` — `deps` (current_user, role guards, kiosk scope),
-  `student/auth`, `student/staff`, `owner/kiosks`, `refiller/kiosks`
-  (33 routes, all declared in `tests/authz/matrix.py`)
+1. **TDD.** Test first, watch it fail for the right reason, then implement.
+2. **Mutation-test anything that matters.** After a security or money rule
+   lands, deliberately break it and confirm tests fail; then restore. A guardrail
+   that has never been seen to fail is not known to work — three times in this
+   build a "passing" check turned out to be inspecting an empty set.
+3. **One rule, one implementation, one mechanism.** Every defect in the legacy
+   audit is a rule enforced in one place and not another. If a rule cannot be
+   made mechanical, say so rather than writing a comment asking people to be
+   careful.
+4. **Verify, don't assume.** Run the command, read the output. Check claims
+   against the old backend's source before repeating them — one "fact" in this
+   spec was stale and had to be corrected.
+5. **Say what is not done.** Partial work is reported as partial.
 
-**Not yet built:** printing (sub-project 4, needs Redis), payments + wallet +
-billing (5, needs Razorpay keys — the critical path), ops (6), the admin API
-layer (7), data migration (8), cutover (9).
+## State of play
+
+**562 tests passing, 6 import contracts kept, ruff clean.** Verify with:
+
+```bash
+.venv/Scripts/python -m pytest -q && .venv/Scripts/lint-imports && .venv/Scripts/python -m ruff check .
+```
+
+### Built
+
+| Area | What exists |
+|---|---|
+| `app/core/` | config, db (+`EnumText`), ids, money, errors, crypto, security, notifier |
+| `identity/` | users, roles, sessions with rotation + reuse detection, password/Google/guest sign-in, email verification, password reset |
+| `kiosks/` | registry, types, onboarding + LIVE gate, pricing bands, paper (incl. consumption from device-reported sheets), assignments, consent-based staff invites, **the scope resolver** |
+| `payments/` | owner Razorpay keys encrypted at rest, set-once with approval, **the payment gate** |
+| `billing/` | plans, subscriptions, trials, per-owner discounts (D13), one quote function |
+| `printing/` | print options + the one workload calculation, Document and PrintTask models, **atomic claim with `FOR UPDATE SKIP LOCKED`** and lease recovery |
+| `api/` | `deps`, `student/auth`, `student/staff`, `owner/kiosks`, `refiller/kiosks` — 33 routes, all in `tests/authz/matrix.py` |
+
+### Not built yet, in dependency order
+
+1. **printing** — document upload pipeline (Ghostscript under `-dSAFER`), device
+   API (`/v1/device/*`), student document routes. Plan:
+   `docs/superpowers/plans/2026-08-16-backend-printing.md`
+2. **orders** — the `Order` aggregate; payment and print tasks commit together.
+   This is what makes "paid but never printed" unreachable.
+3. **wallet** — ledger-as-record, balance derived, top-ups, holds
+4. **Razorpay charging + refunds + webhook** (one endpoint, one secret)
+5. **ops** — admin alerts, audit, analytics, exports
+6. **admin API layer** — `/v1/admin/*`
+7. **migration** from `printit_legacy` (restored locally from a prod dump)
+8. **cutover** — agent rewrite, staging, freeze window
+
+### Blocked on the operator
+
+- **Redis** — not installed, deliberately deferred. Only needed for the device
+  WebSocket hub so production can run >1 worker. Tests will use `fakeredis`;
+  real Redis is exercised at staging, not locally.
+- **Three data decisions** before the migration can be written — see the end of
+  `docs/superpowers/specs/2026-08-15-legacy-data-audit.md`: the ownerless SOLD
+  kiosk, the case-duplicate accounts, and the test/duplicate kiosks.
+
+### Reference documents
+
+- `docs/superpowers/specs/2026-08-14-new-cloud-backend-design.md` — the design,
+  13 recorded decisions, and **§2a mapping every legacy defect to the mechanism
+  that prevents it**
+- `docs/superpowers/specs/2026-08-15-legacy-data-audit.md` — what is actually
+  wrong in the production data
+- `docs/superpowers/plans/` — per-sub-project plans, each with an outcome
+  section listing the defects found while building it
