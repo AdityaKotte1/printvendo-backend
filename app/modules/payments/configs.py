@@ -119,6 +119,47 @@ def set_keys(
     return config
 
 
+def set_webhook_secret(
+    db: Session, user_id: int, *, webhook_secret: str, box: SecretBox
+) -> KioskPaymentConfig:
+    """Store the signing secret for this owner's own Razorpay webhook.
+
+    Separate from the API key secret because Razorpay treats it separately: it
+    is set per webhook in their dashboard, not per key, and an owner can rotate
+    one without the other.
+
+    Deliberately **not** behind the set-once-with-approval flow that guards the
+    keys. Rotating a webhook secret cannot redirect anybody's money -- the worst
+    it can do is make that owner's own deliveries stop verifying, which they
+    will notice immediately and can fix themselves. Requiring an admin for it
+    would mean an owner whose secret leaked has to wait to close the hole.
+    """
+    if not webhook_secret or not webhook_secret.strip():
+        raise BadRequest("Enter the webhook secret from your Razorpay dashboard.")
+
+    config = get_config(db, user_id)
+    if config is None:
+        config = KioskPaymentConfig(user_id=user_id)
+        db.add(config)
+
+    config.razorpay_webhook_secret_encrypted = box.encrypt(webhook_secret.strip())
+    db.add(config)
+    db.flush()
+    return config
+
+
+def decrypt_webhook_secret(config: KioskPaymentConfig, box: SecretBox) -> str:
+    """This owner's webhook signing secret, or "" if they have not set one.
+
+    Empty rather than None so it flows straight into the signature check, which
+    fails closed on an empty secret. An owner who has not set one up simply has
+    no verifiable deliveries -- which is correct, and is not an exception.
+    """
+    if not config.razorpay_webhook_secret_encrypted:
+        return ""
+    return box.decrypt(config.razorpay_webhook_secret_encrypted)
+
+
 def decrypt_secret(config: KioskPaymentConfig, box: SecretBox) -> str:
     """The owner's Razorpay secret, for building a client to charge with.
 
