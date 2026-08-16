@@ -83,7 +83,25 @@ forbidden_modules =
     app.modules.kiosks.models
     app.modules.payments.models
     app.modules.billing.models
+    app.modules.wallet.models
 allow_indirect_imports = True
+
+[importlinter:contract:wallet-is-self-contained]
+name = the wallet depends on no other bounded context
+type = forbidden
+# A balance is a balance. It does not know what a kiosk is, what an order costs,
+# or whose Razorpay collects -- those are the orders module's business, and it
+# calls debit(). Keeping the dependency one-way is what stops the wallet growing
+# a second opinion about where money may be spent, which is the shape of the
+# leak this rewrite exists to close.
+source_modules =
+    app.modules.wallet
+forbidden_modules =
+    app.modules.kiosks
+    app.modules.payments
+    app.modules.billing
+    app.modules.printing
+    app.modules.orders
 
 [importlinter:contract:layers]
 name = api sits above modules sits above core

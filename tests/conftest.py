@@ -111,6 +111,7 @@ def schema(postgres_url: str) -> str:
     import app.modules.orders.models  # noqa: F401
     import app.modules.payments.models  # noqa: F401
     import app.modules.printing.models  # noqa: F401
+    import app.modules.wallet.models  # noqa: F401
 
     reset_public_schema(postgres_url)
     Base.metadata.create_all(get_engine(postgres_url))

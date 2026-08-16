@@ -37,6 +37,7 @@ from app.modules.orders.quotes import OrderQuote, quote_line
 from app.modules.payments.gate import Gateway, kiosk_payment_gate, wallet_may_be_spent
 from app.modules.printing import Document, DocumentState, PrintOptions, PrintTask
 from app.modules.printing.enqueue import committed_sheets, enqueue_task
+from app.modules.wallet.ledger import debit
 
 # Long enough for a student to open a payment app, authenticate and come back;
 # short enough that an abandoned basket does not hold a shop's paper all day.
@@ -53,6 +54,7 @@ NOT_ENOUGH_PAPER = (
 ALREADY_PAID = "That order has already been paid for."
 ORDER_NOT_OPEN = "That order is no longer open for payment."
 ORDER_EXPIRED = "That order expired before it was paid. Please place it again."
+WRONG_METHOD = "That order was not set up to be paid from your wallet."
 
 
 @dataclass(frozen=True)
@@ -189,6 +191,56 @@ def _check_document(document: Document, *, user) -> None:
 # ── paying ──────────────────────────────────────────────────────────────────
 
 
+def require_payable(order: Order, *, now: datetime) -> None:
+    """Refuse an order that cannot be paid, before anything is charged.
+
+    One implementation, called by `mark_paid` and by the wallet path before it
+    debits. A second copy would eventually differ, and the copy that was
+    missing a check would be the one taking money for an expired order.
+    """
+    if order.state is OrderState.PAID or order.state is OrderState.DISPATCHED:
+        raise Conflict(ALREADY_PAID)
+    if order.state in SETTLED_ORDER_STATES:
+        raise Conflict(ORDER_NOT_OPEN)
+    if order.state is not OrderState.AWAITING_PAYMENT:
+        raise Conflict(ORDER_NOT_OPEN)
+    if order.expires_at is not None and order.expires_at <= now:
+        raise Conflict(ORDER_EXPIRED)
+
+
+def pay_with_wallet(
+    db: Session, order: Order, *, now: datetime | None = None
+) -> list[PrintTask]:
+    """The wallet branch of the one commit: debit, and enqueue, together.
+
+    The old backend's `POST /wallet/hold` did the first half and left the second
+    to the caller. Here they are the same call, in the same transaction, so a
+    debit without print tasks is not a state the system can be in.
+
+    The order's public id is the wallet reference, and wallet references are
+    unique per wallet -- so a request retried after a timeout is refused by the
+    ledger rather than debiting twice.
+
+    Checks run before the debit, not after: refusing an expired order is free
+    until money has moved.
+    """
+    now = now or datetime.now(UTC)
+    require_payable(order, now=now)
+
+    if order.payment_method is not PaymentMethod.WALLET:
+        raise BadRequest(WRONG_METHOD)
+
+    debit(
+        db,
+        user_id=order.user_id,
+        amount=order.total_inr,
+        reference=order.public_id,
+        note=f"printing at kiosk {order.kiosk_id}",
+    )
+
+    return mark_paid(db, order, reference=order.public_id, now=now)
+
+
 def mark_paid(
     db: Session,
     order: Order,
@@ -209,15 +261,7 @@ def mark_paid(
     checks availability before it debits, where refusing is still free.
     """
     now = now or datetime.now(UTC)
-
-    if order.state is OrderState.PAID or order.state is OrderState.DISPATCHED:
-        raise Conflict(ALREADY_PAID)
-    if order.state in SETTLED_ORDER_STATES:
-        raise Conflict(ORDER_NOT_OPEN)
-    if order.state is not OrderState.AWAITING_PAYMENT:
-        raise Conflict(ORDER_NOT_OPEN)
-    if order.expires_at is not None and order.expires_at <= now:
-        raise Conflict(ORDER_EXPIRED)
+    require_payable(order, now=now)
 
     order.state = OrderState.PAID
     order.paid_at = now
