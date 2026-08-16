@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 from sqlalchemy import create_engine, text
 
+from tests.conftest import reset_public_schema
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -18,11 +20,7 @@ def empty_database(postgres_url: str) -> str:
     head` meets tables that already exist and fails on the first create_table --
     a failure about test ordering, not about the migration.
     """
-    engine = create_engine(postgres_url, isolation_level="AUTOCOMMIT")
-    with engine.connect() as connection:
-        connection.execute(text("drop schema public cascade"))
-        connection.execute(text("create schema public"))
-    engine.dispose()
+    reset_public_schema(postgres_url)
     return postgres_url
 
 

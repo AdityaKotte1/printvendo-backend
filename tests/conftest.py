@@ -1,11 +1,19 @@
 import os
+import time
 from collections.abc import Iterator
 
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.core.db import Base, get_engine
+
+# Long enough that an ordinary reset never trips it, short enough that a stuck
+# one reports rather than hangs the build.
+RESET_LOCK_TIMEOUT = "5s"
+RESET_ATTEMPTS = 3
+RESET_RETRY_SECONDS = 0.5
 
 DEFAULT_TEST_URL = "postgresql+psycopg://printvendo:printvendo@localhost:5432/printvendo_test"
 
@@ -31,6 +39,58 @@ def postgres_url() -> str:
     return url
 
 
+def reset_public_schema(url: str) -> None:
+    """Drop and recreate `public`, without deadlocking against a live connection.
+
+    `drop schema public cascade` needs an AccessExclusiveLock on every table.
+    Anything else holding a row lock at that moment deadlocks against it -- and
+    something else genuinely is holding one: the migration tests run `alembic`
+    in a subprocess, and its connection can outlive the process by a moment.
+    The failure was intermittent and blamed whichever test ran before it.
+
+    So: bound the wait with `lock_timeout` and retry, rather than letting
+    Postgres detect a deadlock and kill one of the two. If it still cannot get
+    the lock, say **who** is holding it -- a mystery deadlock in CI is worth far
+    less than a message naming the connection to go and look at.
+
+    One implementation, shared by the schema fixture and the migration tests.
+    Two copies would drift, and the copy without the retry would fail rarely
+    enough to be dismissed as noise.
+    """
+    engine = create_engine(url, isolation_level="AUTOCOMMIT")
+    try:
+        for attempt in range(RESET_ATTEMPTS):
+            with engine.connect() as connection:
+                connection.execute(text(f"set lock_timeout = '{RESET_LOCK_TIMEOUT}'"))
+                try:
+                    connection.execute(text("drop schema public cascade"))
+                    connection.execute(text("create schema public"))
+                    return
+                except OperationalError:
+                    if attempt == RESET_ATTEMPTS - 1:
+                        pytest.fail(_who_holds_the_lock(engine))
+                    time.sleep(RESET_RETRY_SECONDS)
+    finally:
+        engine.dispose()
+
+
+def _who_holds_the_lock(engine) -> str:
+    """Whatever is still connected, so a failure names a culprit."""
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text(
+                "select pid, state, left(coalesce(query, ''), 120) "
+                "from pg_stat_activity "
+                "where datname = current_database() and pid <> pg_backend_pid()"
+            )
+        ).all()
+    listing = "\n".join(f"  pid={pid} state={state} query={query!r}" for pid, state, query in rows)
+    return (
+        "Could not reset the test schema: something else is holding a lock on it.\n"
+        f"Connections to this database:\n{listing or '  (none)'}"
+    )
+
+
 @pytest.fixture(scope="session")
 def schema(postgres_url: str) -> str:
     """Build the whole schema from ORM metadata once per test session.
@@ -51,11 +111,8 @@ def schema(postgres_url: str) -> str:
     import app.modules.payments.models  # noqa: F401
     import app.modules.printing.models  # noqa: F401
 
-    engine = get_engine(postgres_url)
-    with engine.begin() as connection:
-        connection.execute(text("drop schema public cascade"))
-        connection.execute(text("create schema public"))
-    Base.metadata.create_all(engine)
+    reset_public_schema(postgres_url)
+    Base.metadata.create_all(get_engine(postgres_url))
     return postgres_url
 
 
