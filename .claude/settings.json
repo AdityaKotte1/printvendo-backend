@@ -1,0 +1,6 @@
+{
+  "statusLine": {
+    "type": "command",
+    "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\gurua\\Downloads\\Telegram Desktop\\printit-upgrade\\printvendo-backend\\.claude\\statusline.ps1\""
+  }
+}

@@ -133,7 +133,7 @@ Read this before continuing the build. It is the method, not a preference.
 
 ## State of play
 
-**562 tests passing, 6 import contracts kept, ruff clean.** Verify with:
+**756 tests passing, 7 import contracts kept, ruff clean.** Verify with:
 
 ```bash
 .venv/Scripts/python -m pytest -q && .venv/Scripts/lint-imports && .venv/Scripts/python -m ruff check .
@@ -148,28 +148,27 @@ Read this before continuing the build. It is the method, not a preference.
 | `kiosks/` | registry, types, onboarding + LIVE gate, pricing bands, paper (incl. consumption from device-reported sheets), assignments, consent-based staff invites, **the scope resolver** |
 | `payments/` | owner Razorpay keys encrypted at rest, set-once with approval, **the payment gate** |
 | `billing/` | plans, subscriptions, trials, per-owner discounts (D13), one quote function |
-| `printing/` | print options + the one workload calculation, Document and PrintTask models, **atomic claim with `FOR UPDATE SKIP LOCKED`** and lease recovery |
-| `api/` | `deps`, `student/auth`, `student/staff`, `owner/kiosks`, `refiller/kiosks` — 33 routes, all in `tests/authz/matrix.py` |
+| `printing/` | print options + the one workload calculation, Document and PrintTask models, **atomic claim with `FOR UPDATE SKIP LOCKED`** and lease recovery, storage (opaque keys), PDF pipeline (Ghostscript under `-dSAFER`), task progress + paper from device-reported sheets, photo→A4 layout, retention |
+| `api/` | `deps`, `student/auth|staff|documents`, `owner/kiosks`, `refiller/kiosks`, `device/agent|tasks` — 45 routes, all in `tests/authz/matrix.py` |
 
 ### Not built yet, in dependency order
 
-1. **printing** — document upload pipeline (Ghostscript under `-dSAFER`), device
-   API (`/v1/device/*`), student document routes. Plan:
-   `docs/superpowers/plans/2026-08-16-backend-printing.md`
-2. **orders** — the `Order` aggregate; payment and print tasks commit together.
+1. **orders** — the `Order` aggregate; payment and print tasks commit together.
    This is what makes "paid but never printed" unreachable.
-3. **wallet** — ledger-as-record, balance derived, top-ups, holds
-4. **Razorpay charging + refunds + webhook** (one endpoint, one secret)
-5. **ops** — admin alerts, audit, analytics, exports
-6. **admin API layer** — `/v1/admin/*`
+2. **wallet** — ledger-as-record, balance derived, top-ups, holds
+3. **Razorpay charging + refunds + webhook** (one endpoint, one secret)
+4. **ops** — admin alerts, audit, analytics, exports
+5. **admin API layer** — `/v1/admin/*`
+6. **device WebSocket hub** — needs Redis, deferred to staging by the operator
 7. **migration** from `printit_legacy` (restored locally from a prod dump)
 8. **cutover** — agent rewrite, staging, freeze window
 
 ### Blocked on the operator
 
-- **Redis** — not installed, deliberately deferred. Only needed for the device
-  WebSocket hub so production can run >1 worker. Tests will use `fakeredis`;
-  real Redis is exercised at staging, not locally.
+- **Redis** — not installed. Confirmed by the operator as a production concern,
+  not a local one. It is only needed for the device WebSocket hub so production
+  can run >1 worker; the device API works without it by polling. Tests will use
+  `fakeredis`; real Redis is exercised at staging.
 - **Three data decisions** before the migration can be written — see the end of
   `docs/superpowers/specs/2026-08-15-legacy-data-audit.md`: the ownerless SOLD
   kiosk, the case-duplicate accounts, and the test/duplicate kiosks.
