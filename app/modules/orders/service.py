@@ -34,6 +34,7 @@ from app.modules.orders.models import (
     PaymentMethod,
 )
 from app.modules.orders.quotes import OrderQuote, quote_line
+from app.modules.payments import PaymentKind, record_wallet_payment
 from app.modules.payments.gate import Gateway, kiosk_payment_gate, wallet_may_be_spent
 from app.modules.printing import Document, DocumentState, PrintOptions, PrintTask
 from app.modules.printing.enqueue import committed_sheets, enqueue_task
@@ -236,6 +237,20 @@ def pay_with_wallet(
         amount=order.total_inr,
         reference=order.public_id,
         note=f"printing at kiosk {order.kiosk_id}",
+    )
+
+    # The debit above is the money moving; this is the record of what it paid
+    # for. Both are in this transaction, so a refused debit leaves neither -- and
+    # every paid order, however it was paid, has exactly one Payment to refund
+    # against. Without it a wallet-paid order could not be refunded at all.
+    record_wallet_payment(
+        db,
+        user_id=order.user_id,
+        kind=PaymentKind.PRINT_ORDER,
+        amount=order.total_inr,
+        kiosk_id=order.kiosk_id,
+        order_id=order.id,
+        now=now,
     )
 
     return mark_paid(db, order, reference=order.public_id, now=now)

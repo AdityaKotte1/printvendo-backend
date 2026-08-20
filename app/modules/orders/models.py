@@ -115,9 +115,14 @@ class Order(Base):
     payment_method: Mapped[PaymentMethod | None] = mapped_column(
         EnumText(PaymentMethod, 12), nullable=True
     )
-    # Which Razorpay account collected. Recorded at placement from the one gate,
-    # so a refund months later goes back the way the money came rather than
-    # being re-derived from a kiosk whose configuration has since changed.
+    # Which arrangement the gate returned when this order was placed, recorded
+    # so the kiosk's configuration changing since cannot rewrite history.
+    #
+    # Not what a refund reads. That is `Payment.source` and
+    # `Payment.collecting_user_id`, which are the only ones that can be right
+    # for a wallet-paid order: the gate answers about the *kiosk*, so it says
+    # "platform_gateway" even when the money in fact came from a balance and no
+    # gateway collected anything.
     gateway: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     # Nullable-unique, exactly as the old `razorpay_payment_id` was: the unique

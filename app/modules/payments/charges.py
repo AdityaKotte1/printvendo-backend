@@ -35,7 +35,12 @@ from app.modules.payments.configs import (
     get_config,
 )
 from app.modules.payments.gate import Gateway, kiosk_payment_gate
-from app.modules.payments.models import Payment, PaymentKind, PaymentStatus
+from app.modules.payments.models import (
+    Payment,
+    PaymentKind,
+    PaymentSource,
+    PaymentStatus,
+)
 from app.modules.payments.signatures import verify_payment_signature
 
 KIOSK_CLOSED = "This kiosk is not accepting payments at the moment."
@@ -176,11 +181,54 @@ def open_checkout(
         kind=kind,
         order_id=order_id,
         kiosk_id=kiosk.id if kiosk is not None else None,
-        gateway=gateway.value,
+        source=PaymentSource(gateway.value),
         collecting_user_id=collecting_user_id,
         razorpay_order_id=razorpay_order_id,
         amount_inr=amount,
         status=PaymentStatus.CREATED,
+    )
+    db.add(payment)
+    db.flush()
+    return payment
+
+
+def record_wallet_payment(
+    db: Session,
+    *,
+    user_id: int,
+    kind: PaymentKind,
+    amount: Decimal,
+    kiosk_id: int | None = None,
+    order_id: int | None = None,
+    now: datetime | None = None,
+) -> Payment:
+    """Record a sum paid out of a wallet balance.
+
+    Written CAPTURED immediately, and correctly so: unlike a gateway payment
+    there is no interval during which the money might not arrive. It already
+    has -- the caller has just debited the ledger, in this transaction, and if
+    that debit is rolled back so is this row.
+
+    No `razorpay_order_id` and no `razorpay_payment_id`, because nothing was
+    opened at a gateway and nothing was captured at one. That absence is not
+    incidental: it is what later refuses a to-source refund on this payment.
+
+    Idempotency is the caller's ledger reference, not a second guard here. The
+    wallet's `UNIQUE (wallet_id, reference)` refuses a replayed debit before
+    this is reached, so a retry never gets far enough to write a second row.
+    Adding a check here would be a second answer to a question already settled.
+    """
+    payment = Payment(
+        user_id=user_id,
+        kind=kind,
+        order_id=order_id,
+        kiosk_id=kiosk_id,
+        source=PaymentSource.WALLET,
+        collecting_user_id=None,
+        razorpay_order_id=None,
+        amount_inr=as_money(amount),
+        status=PaymentStatus.CAPTURED,
+        captured_at=now or datetime.now(UTC),
     )
     db.add(payment)
     db.flush()

@@ -142,6 +142,25 @@ class PaymentKind(StrEnum):
     SUBSCRIPTION = "subscription"
 
 
+class PaymentSource(StrEnum):
+    """Where a payment's money actually came from.
+
+    Not a `Gateway`: `kiosk_payment_gate` answers "whose Razorpay collects at
+    this kiosk", and WALLET is not an answer it can ever give -- balance is
+    money Printvendo already holds, so nothing is collected at all. The two
+    gateway values are deliberately the same strings the gate returns, so the
+    recorded answer reads back as the gate's own.
+
+    The column is named `source` rather than `gateway` because a column called
+    `gateway` holding "wallet" is the `price_cents`-holding-rupees mistake in a
+    new place: the name would be false for a third of the rows.
+    """
+
+    PLATFORM_GATEWAY = "platform_gateway"
+    OWNER_GATEWAY = "owner_gateway"
+    WALLET = "wallet"
+
+
 class PaymentStatus(StrEnum):
     # Razorpay order opened; the student has not paid yet, or we have not heard.
     CREATED = "created"
@@ -152,14 +171,20 @@ class PaymentStatus(StrEnum):
 
 
 class Payment(Base):
-    """One sum collected through a gateway.
+    """One sum the student paid, however they paid it.
+
+    Gateway captures and wallet debits both land here. A wallet payment collects
+    nothing -- the money is already Printvendo's -- but it is still a sum paid
+    for a thing, and giving it its own table would mean two implementations of
+    "how much of this has been refunded" and two of "is it fully refunded yet".
+    Those are precisely the pair that drifts apart.
 
     `razorpay_payment_id` is **nullable-unique**, and that constraint is the
     replay guard: a webhook delivered three times can insert the capture once.
     The old backend relied on the same property for top-ups and on nothing at
     all for the other two purposes.
 
-    `gateway` and `kiosk_id` are recorded at creation rather than derived later.
+    `source` and `kiosk_id` are recorded at creation rather than derived later.
     A refund six months on has to go back to the account that actually collected
     -- re-deriving it from a kiosk whose keys or subscription have changed since
     is how money gets sent to the wrong place.
@@ -185,7 +210,9 @@ class Payment(Base):
     kiosk_id: Mapped[int | None] = mapped_column(
         ForeignKey("kiosks.id", ondelete="RESTRICT"), nullable=True, index=True
     )
-    gateway: Mapped[str] = mapped_column(String(20))
+    source: Mapped[PaymentSource] = mapped_column(
+        EnumText(PaymentSource, 20), index=True
+    )
 
     # The owner whose Razorpay account collected this, or NULL when it was the
     # platform's. Recorded rather than re-derived: owners register their own
@@ -196,7 +223,12 @@ class Payment(Base):
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=True, index=True
     )
 
-    razorpay_order_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    # Null for a wallet payment: nothing was opened at a gateway, because
+    # nothing was collected. Nullable-unique, so the many wallet rows coexist
+    # while two gateway rows still cannot claim one Razorpay order.
+    razorpay_order_id: Mapped[str | None] = mapped_column(
+        String(64), unique=True, nullable=True, index=True
+    )
     razorpay_payment_id: Mapped[str | None] = mapped_column(
         String(64), unique=True, nullable=True, index=True
     )

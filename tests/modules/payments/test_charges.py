@@ -27,7 +27,12 @@ from app.modules.payments.charges import (
     record_failure,
 )
 from app.modules.payments.gate import Gateway
-from app.modules.payments.models import Payment, PaymentKind, PaymentStatus
+from app.modules.payments.models import (
+    Payment,
+    PaymentKind,
+    PaymentSource,
+    PaymentStatus,
+)
 
 PLATFORM_KEY = "rzp_test_platform"
 PLATFORM_SECRET = "platform_secret_value"
@@ -323,7 +328,10 @@ def test_the_payment_records_which_arrangement_collected(
     the account that actually collected, whatever the kiosk looks like then."""
     payment = a_payment(db_session, razorpay, student, platform_kiosk)
 
-    assert payment.gateway == Gateway.PLATFORM_GATEWAY.value
+    # A typed value, not a bare string: `EnumText` is what stops this reading
+    # back as a plain str after a round-trip and quietly passing `== Gateway.X`
+    # while `.value` raises.
+    assert payment.source is PaymentSource.PLATFORM_GATEWAY
     assert payment.kiosk_id == platform_kiosk.id
 
 

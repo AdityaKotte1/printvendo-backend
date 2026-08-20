@@ -114,6 +114,22 @@ Copy `.env.example` to `.env` and fill it. The app refuses to boot with a
   source, because the platform cannot credit a balance against rupees it never
   held. The old backend had `refunds` as one of three services independently
   deciding whose Razorpay collects.
+- **Every paid order has exactly one `Payment`, however it was paid.**
+  `pay_with_wallet` debits the ledger *and* writes a CAPTURED `Payment` with
+  `source = WALLET`, in the same transaction, so a refused debit leaves neither.
+  The alternative — a wallet reversal living in `orders` — would mean two
+  implementations of "how much of this has been given back" and two of "is it
+  fully refunded yet", which is the shape of every defect in the legacy audit.
+- **`Payment.source`, not `Payment.gateway`.** A column called `gateway` holding
+  `"wallet"` is `price_cents` holding rupees. `PaymentSource` is deliberately
+  *not* `Gateway`: the gate answers "whose Razorpay collects at this kiosk", and
+  WALLET is not an answer it can give. `Order.gateway` still records the gate's
+  answer and is **not** what a refund reads.
+- **The refund destination table is derived, never flagged.** Wallet is legal
+  when `collecting_user_id is None`; source is legal when
+  `razorpay_payment_id is not None`. Two reads off the row cover all three
+  cases: balance-paid (wallet only — there is no gateway payment to reverse),
+  platform-collected (either), owner-collected (source only). Mutation-tested.
 - **The refund idempotency key is looked up before any validation.** Not after.
   A fully-refunded payment is REFUNDED with nothing left to give back, so a
   retry validated first is refused for exceeding the captured amount -- and the
@@ -150,7 +166,7 @@ Read this before continuing the build. It is the method, not a preference.
 
 ## State of play
 
-**929 tests passing, 10 import contracts kept, ruff clean.** Verify with:
+**934 tests passing, 10 import contracts kept, ruff clean.** Verify with:
 
 ```bash
 .venv/Scripts/python -m pytest -q && .venv/Scripts/lint-imports && .venv/Scripts/python -m ruff check .
@@ -163,7 +179,7 @@ Read this before continuing the build. It is the method, not a preference.
 | `app/core/` | config, db (+`EnumText`), ids, money, errors, crypto, security, notifier |
 | `identity/` | users, roles, sessions with rotation + reuse detection, password/Google/guest sign-in, email verification, password reset |
 | `kiosks/` | registry, types, onboarding + LIVE gate, pricing bands, paper (incl. consumption from device-reported sheets), assignments, consent-based staff invites, **the scope resolver** |
-| `payments/` | owner Razorpay keys encrypted at rest, set-once with approval, **the payment gate**, checkout + capture, in-house signature verification, one webhook per collecting account, **refunds** |
+| `payments/` | owner Razorpay keys encrypted at rest, set-once with approval, **the payment gate**, checkout + capture, in-house signature verification, one webhook per collecting account, **refunds** (gateway and balance, one path) |
 | `billing/` | plans, subscriptions, trials, per-owner discounts (D13), one quote function |
 | `orders/` | **the aggregate** — payment and print tasks commit together, so "paid but never printed" is unreachable; quotes + gateway fee, wallet and gateway as two branches into one commit, expiry that releases reserved paper |
 | `wallet/` | ledger-as-record with the balance derived from it, double-spend refused by a conditional UPDATE rather than a read-check-write, `UNIQUE (wallet_id, reference)` for replayed webhooks |
@@ -172,16 +188,11 @@ Read this before continuing the build. It is the method, not a preference.
 
 ### Not built yet, in dependency order
 
-1. **Refunding a wallet-paid order.** Gateway refunds are done. A wallet-paid
-   order writes no `Payment` row -- `pay_with_wallet` debits and sets
-   `payment_reference` to the order's public id -- so `payments.refund` cannot
-   reach it, and today such an order cannot be refunded at all. Deciding where
-   that reversal lives is an open design question, not an oversight.
-2. **ops** — admin alerts, audit, analytics, exports
-3. **admin API layer** — `/v1/admin/*`
-4. **device WebSocket hub** — needs Redis, deferred to staging by the operator
-5. **migration** from `printit_legacy` (restored locally from a prod dump)
-6. **cutover** — agent rewrite, staging, freeze window
+1. **ops** — admin alerts, audit, analytics, exports
+2. **admin API layer** — `/v1/admin/*`
+3. **device WebSocket hub** — needs Redis, deferred to staging by the operator
+4. **migration** from `printit_legacy` (restored locally from a prod dump)
+5. **cutover** — agent rewrite, staging, freeze window
 
 ### Blocked on the operator
 

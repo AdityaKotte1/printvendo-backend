@@ -27,6 +27,7 @@ from app.modules.payments.charges import (
     payment_for_razorpay_order,
     record_capture,
     record_failure,
+    record_wallet_payment,
     webhook_secret_for,
 )
 from app.modules.payments.configs import (
@@ -54,6 +55,7 @@ from app.modules.payments.models import (
     Payment,
     PaymentConfigChangeRequest,
     PaymentKind,
+    PaymentSource,
     PaymentStatus,
     Refund,
     RefundDestination,
@@ -85,6 +87,7 @@ __all__ = [
     "PaymentConfigChangeRequest",
     "PaymentConfigView",
     "PaymentKind",
+    "PaymentSource",
     "PaymentStatus",
     "RazorpayGateway",
     "Refund",
@@ -105,6 +108,7 @@ __all__ = [
     "payment_for_razorpay_order",
     "record_capture",
     "record_failure",
+    "record_wallet_payment",
     "refund",
     "refund_for_key",
     "refunds_for",

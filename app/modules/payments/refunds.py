@@ -47,6 +47,7 @@ from app.modules.wallet import EntryKind, credit
 AMOUNT_MUST_BE_POSITIVE = "A refund amount must be more than zero."
 REFUND_EXCEEDS_CAPTURED = "That refund is more than what was paid."
 ILLEGAL_DESTINATION = "Refunds from an owner's account must go back to the source."
+NOTHING_TO_REVERSE = "That payment came from a balance, so it can only go back to one."
 NO_GATEWAY = "Refunding to the source needs a live Razorpay connection."
 ALREADY_REFUNDED = "That refund has already been recorded."
 KEY_BELONGS_ELSEWHERE = "That refund reference has already been used for another payment."
@@ -69,11 +70,32 @@ class RefundSink(Protocol):
 def _may_go_to_wallet(payment: Payment) -> bool:
     """Whether this payment's money may be credited as platform balance.
 
-    Only when the platform collected it. A wallet credit is the platform
+    Only when nobody else collected it. A wallet credit is the platform
     promising to honour rupees it holds; against money that went straight to an
     owner's Razorpay account there is nothing behind that promise.
     """
     return payment.collecting_user_id is None
+
+
+def _may_go_to_source(payment: Payment) -> bool:
+    """Whether there is a gateway payment to reverse.
+
+    Derived from the absence of a captured Razorpay id rather than from a flag
+    somebody sets, so it cannot disagree with the row it describes. A wallet
+    payment has none -- nothing was captured at a gateway -- and calling
+    Razorpay with `razorpay_payment_id=None` is what this refuses.
+    """
+    return payment.razorpay_payment_id is not None
+
+
+# The whole destination rule, as a table rather than a paragraph. Both columns
+# are read off the Payment row, so a kiosk that changed hands or lost its keys
+# since cannot move a refund to a different account.
+#
+#   paid by          collected by   -> wallet   -> source
+#   wallet balance   nobody            yes        no: nothing to reverse
+#   gateway          the platform      yes        yes
+#   gateway          an owner          no         yes
 
 
 def refund_for_key(db: Session, idempotency_key: str) -> Refund | None:
@@ -129,6 +151,8 @@ def refund(
 
     if destination is RefundDestination.WALLET and not _may_go_to_wallet(payment):
         raise BadRequest(ILLEGAL_DESTINATION)
+    if destination is RefundDestination.SOURCE and not _may_go_to_source(payment):
+        raise BadRequest(NOTHING_TO_REVERSE)
 
     available = as_money(payment.amount_inr) - as_money(payment.refunded_inr)
     if amount > available:
