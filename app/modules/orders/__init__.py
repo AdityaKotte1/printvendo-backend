@@ -25,6 +25,7 @@ from app.modules.orders.quotes import (
     gateway_fee,
     quote_line,
 )
+from app.modules.orders.refunds import apply_payment_refund
 from app.modules.orders.service import (
     ORDER_LIFETIME,
     RequestedDocument,
@@ -47,6 +48,7 @@ __all__ = [
     "OrderState",
     "PaymentMethod",
     "RequestedDocument",
+    "apply_payment_refund",
     "expire_stale_orders",
     "gateway_fee",
     "mark_paid",

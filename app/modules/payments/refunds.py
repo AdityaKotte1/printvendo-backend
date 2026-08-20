@@ -105,6 +105,18 @@ def refund_for_key(db: Session, idempotency_key: str) -> Refund | None:
     ).scalar_one_or_none()
 
 
+def refund_for_razorpay_id(db: Session, razorpay_refund_id: str) -> Refund | None:
+    """The refund we already hold for Razorpay's id, if any.
+
+    What makes a redelivered `refund.processed` a no-op, and what recognises our
+    own to-source refund coming back to us as an event. The column is unique, so
+    this is a lookup on the same constraint that would refuse the insert.
+    """
+    return db.execute(
+        select(Refund).where(Refund.razorpay_refund_id == razorpay_refund_id)
+    ).scalar_one_or_none()
+
+
 def refunds_for(db: Session, payment: Payment) -> list[Refund]:
     """Everything given back against this payment, oldest first."""
     return list(
@@ -126,6 +138,7 @@ def refund(
     actor_user_id: int | None = None,
     reason: str | None = None,
     razorpay: RazorpayGateway | None = None,
+    external_refund_id: str | None = None,
     sink: RefundSink | None = None,
 ) -> Refund:
     """Issue a refund, or hand back the one this key already produced.
@@ -135,6 +148,13 @@ def refund(
     money. Reusing it against a *different payment* is refused, because
     returning someone else's refund row would report success for a refund that
     never happened.
+
+    `external_refund_id` records a to-source refund that **already happened
+    elsewhere** -- an owner refunding from their own Razorpay dashboard, which
+    our books would otherwise never hear about. The gateway is not called, since
+    calling it would issue a second refund for money already returned. Every
+    other rule still applies, including the amount check: an event claiming more
+    than was captured is refused rather than written.
     """
     already = refund_for_key(db, idempotency_key)
     if already is not None:
@@ -158,8 +178,8 @@ def refund(
     if amount > available:
         raise Conflict(REFUND_EXCEEDS_CAPTURED)
 
-    razorpay_refund_id: str | None = None
-    if destination is RefundDestination.SOURCE:
+    razorpay_refund_id: str | None = external_refund_id
+    if destination is RefundDestination.SOURCE and external_refund_id is None:
         if razorpay is None:
             # Fail closed. Writing the row without calling Razorpay would record
             # a refund the student never receives, and nothing would retry it.
@@ -179,14 +199,21 @@ def refund(
         actor_user_id=actor_user_id,
         reason=(reason or "").strip()[:300] or None,
     )
-    db.add(refund_row)
-
     try:
-        db.flush()
+        # Inside a savepoint, for the reason the wallet ledger already documents:
+        # an IntegrityError from flush() aborts the whole transaction, not just
+        # the failed INSERT. Without this, catching it and raising a tidy
+        # Conflict would hand the caller a session on which every later
+        # statement fails with "current transaction is aborted", a long way from
+        # the cause. Rolling back to the savepoint undoes exactly this refund.
+        with db.begin_nested():
+            db.add(refund_row)
+            db.flush()
     except IntegrityError as exc:
         # Two callers with one key arrived together and both got past the
-        # lookup. The unique index decides, rather than the SELECT above --
-        # which is the read-check-write that two concurrent retries both pass.
+        # lookup, or two of our rows are claiming one Razorpay refund. The
+        # unique index decides, rather than the SELECT above -- which is the
+        # read-check-write that two concurrent retries both pass.
         raise Conflict(ALREADY_REFUNDED) from exc
 
     payment.refunded_inr = as_money(payment.refunded_inr + amount)

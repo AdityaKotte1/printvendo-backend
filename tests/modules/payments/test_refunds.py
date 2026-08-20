@@ -566,3 +566,51 @@ def test_the_payment_status_always_matches_how_much_went_back(
 
     assert platform_payment.refunded_inr == platform_payment.amount_inr
     assert platform_payment.status is PaymentStatus.REFUNDED
+
+
+# ── a refused refund leaves a usable session ────────────────────────────────
+
+
+def test_a_duplicate_refund_does_not_poison_the_transaction(
+    db_session, platform_payment
+):
+    """The lesson the wallet module already learned, in a second place.
+
+    A duplicate key raises IntegrityError from `flush()`, and that aborts the
+    whole transaction -- not just the failed INSERT. Catching it and raising a
+    tidy Conflict hands the caller a session on which every subsequent statement
+    fails with "current transaction is aborted", a long way from the cause. The
+    insert must happen inside a savepoint so rolling it back undoes exactly this
+    refund and leaves everything else the request had done intact.
+    """
+    from sqlalchemy import select
+
+    from app.modules.payments.models import Refund
+
+    class Gateway:
+        def refund(self, *, razorpay_payment_id, amount_paise, idempotency_key):
+            # The same gateway id twice: two of our rows claiming one real
+            # refund, which the unique index refuses.
+            return "rfnd_SAME"
+
+    a_refund(
+        db_session,
+        platform_payment,
+        destination=RefundDestination.SOURCE,
+        razorpay=Gateway(),
+        key="first",
+    )
+
+    with pytest.raises(Conflict):
+        a_refund(
+            db_session,
+            platform_payment,
+            destination=RefundDestination.SOURCE,
+            razorpay=Gateway(),
+            key="second",
+        )
+
+    # The session must still work. Without a savepoint this raises
+    # PendingRollbackError instead of answering.
+    assert db_session.execute(select(Refund)).scalars().all()
+    assert platform_payment.refunded_inr == Decimal("20.00")

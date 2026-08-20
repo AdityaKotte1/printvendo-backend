@@ -454,3 +454,217 @@ def test_a_delivery_to_an_unconfigured_owner_url_is_refused(
             secret="",
             collecting_user_id=owner.id,
         )
+
+
+# ── refunds issued somewhere else ───────────────────────────────────────────
+#
+# An owner can refund a student from their own Razorpay dashboard, and the
+# platform can do the same from its own. Without this the money leaves the
+# account and our books never hear: the Payment stays CAPTURED and the order
+# stays PAID, so the student is refunded and still owed a print.
+
+
+@dataclass
+class SpyRefundSink:
+    refunds: list = field(default_factory=list)
+
+    def on_refund(self, db, payment, refund):
+        self.refunds.append(refund)
+
+
+def refund_body(
+    *,
+    event: str = "refund.processed",
+    order_id: str,
+    payment_id: str = "pay_REAL",
+    refund_id: str = "rfnd_EXTERNAL",
+    amount_paise: int = 2000,
+) -> bytes:
+    """Razorpay puts both entities in a refund event, so the payment is found
+    the same way as for a capture -- one lookup path, and the wrong-account
+    check keeps working unchanged."""
+    return json.dumps(
+        {
+            "event": event,
+            "payload": {
+                "refund": {
+                    "entity": {
+                        "id": refund_id,
+                        "payment_id": payment_id,
+                        "amount": amount_paise,
+                        "status": "processed",
+                    }
+                },
+                "payment": {"entity": {"id": payment_id, "order_id": order_id}},
+            },
+        }
+    ).encode()
+
+
+@pytest.fixture
+def captured(db_session, settlement, payment) -> Payment:
+    deliver(db_session, settlement, event_body(order_id=payment.razorpay_order_id))
+    return payment
+
+
+def test_a_refund_made_at_razorpay_is_recorded_here(db_session, settlement, captured):
+    from app.modules.payments.refunds import refunds_for
+
+    sink = SpyRefundSink()
+    outcome = handle_webhook(
+        db_session,
+        body=(body := refund_body(order_id=captured.razorpay_order_id)),
+        signature=sign(body),
+        secret=SECRET,
+        settlement=settlement,
+        refund_sink=sink,
+    )
+
+    assert outcome.handled is True
+    rows = refunds_for(db_session, captured)
+    assert len(rows) == 1
+    assert rows[0].razorpay_refund_id == "rfnd_EXTERNAL"
+    assert rows[0].amount_inr == Decimal("20.00")
+    assert captured.refunded_inr == Decimal("20.00")
+    assert captured.status is PaymentStatus.REFUNDED
+    assert len(sink.refunds) == 1
+
+
+def test_a_redelivered_refund_event_records_one_refund(
+    db_session, settlement, captured
+):
+    """Razorpay redelivers. The refund id is what makes the second delivery a
+    no-op, exactly as razorpay_payment_id does for a capture."""
+    from app.modules.payments.refunds import refunds_for
+
+    body = refund_body(order_id=captured.razorpay_order_id)
+    outcomes = [
+        handle_webhook(
+            db_session,
+            body=body,
+            signature=sign(body),
+            secret=SECRET,
+            settlement=settlement,
+            refund_sink=SpyRefundSink(),
+        ).detail
+        for _ in range(3)
+    ]
+
+    assert len(refunds_for(db_session, captured)) == 1
+    assert captured.refunded_inr == Decimal("20.00")
+    assert outcomes[1:] == ["refund already recorded", "refund already recorded"]
+
+
+def test_a_partial_refund_at_razorpay_is_recorded_as_partial(
+    db_session, settlement, captured
+):
+    body = refund_body(order_id=captured.razorpay_order_id, amount_paise=500)
+    handle_webhook(
+        db_session,
+        body=body,
+        signature=sign(body),
+        secret=SECRET,
+        settlement=settlement,
+        refund_sink=SpyRefundSink(),
+    )
+
+    assert captured.refunded_inr == Decimal("5.00")
+    assert captured.status is PaymentStatus.PARTIALLY_REFUNDED
+
+
+def test_a_refund_we_issued_ourselves_is_not_recorded_twice(
+    db_session, settlement, captured
+):
+    """Our own to-source refund produces a refund.processed event too. The
+    razorpay refund id we stored when we issued it is what recognises it."""
+    from app.modules.payments import RefundDestination, refund
+    from app.modules.payments.refunds import refunds_for
+
+    class Gateway:
+        def refund(self, *, razorpay_payment_id, amount_paise, idempotency_key):
+            return "rfnd_OURS"
+
+    refund(
+        db_session,
+        payment=captured,
+        amount=Decimal("20.00"),
+        destination=RefundDestination.SOURCE,
+        idempotency_key="ours",
+        razorpay=Gateway(),
+    )
+
+    body = refund_body(order_id=captured.razorpay_order_id, refund_id="rfnd_OURS")
+    outcome = handle_webhook(
+        db_session,
+        body=body,
+        signature=sign(body),
+        secret=SECRET,
+        settlement=settlement,
+        refund_sink=SpyRefundSink(),
+    )
+
+    # "already recorded", not "could not be recorded". The distinction is the
+    # point: without the razorpay-id lookup this still ends up as one refund,
+    # but by attempting an insert that the unique index refuses -- so the log
+    # reads like a failure and an operator is sent looking for a problem that
+    # does not exist.
+    assert outcome.handled is False
+    assert outcome.detail == "refund already recorded"
+    assert len(refunds_for(db_session, captured)) == 1
+    assert captured.refunded_inr == Decimal("20.00")
+
+
+def test_a_refund_event_for_another_owners_payment_is_refused(
+    db_session, settlement, captured
+):
+    """The same rule as for a capture, and it must not be weaker here: an owner
+    holds a secret that verifies, so this comparison is the only thing stopping
+    them writing refunds against a competitor's takings."""
+    body = refund_body(order_id=captured.razorpay_order_id)
+
+    with pytest.raises(Unauthorized):
+        handle_webhook(
+            db_session,
+            body=body,
+            signature=sign(body),
+            secret=SECRET,
+            settlement=settlement,
+            refund_sink=SpyRefundSink(),
+            collecting_user_id=999_999,
+        )
+
+    assert captured.refunded_inr == Decimal("0.00")
+
+
+def test_an_unsigned_refund_event_changes_nothing(db_session, settlement, captured):
+    body = refund_body(order_id=captured.razorpay_order_id)
+
+    with pytest.raises(Unauthorized):
+        handle_webhook(
+            db_session,
+            body=body,
+            signature="ff" * 32,
+            secret=SECRET,
+            settlement=settlement,
+            refund_sink=SpyRefundSink(),
+        )
+
+    assert captured.refunded_inr == Decimal("0.00")
+
+
+def test_a_refund_created_event_is_not_money_yet(db_session, settlement, captured):
+    """`refund.created` means Razorpay accepted the instruction, not that the
+    student has the money. Recording it would show a refund that can still
+    fail."""
+    body = refund_body(order_id=captured.razorpay_order_id, event="refund.created")
+    outcome = handle_webhook(
+        db_session,
+        body=body,
+        signature=sign(body),
+        secret=SECRET,
+        settlement=settlement,
+        refund_sink=SpyRefundSink(),
+    )
+
+    assert outcome.handled is False
+    assert captured.refunded_inr == Decimal("0.00")

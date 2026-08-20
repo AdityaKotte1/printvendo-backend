@@ -31,13 +31,20 @@ from typing import Protocol
 
 from sqlalchemy.orm import Session
 
-from app.core.errors import Unauthorized
+from app.core.errors import BadRequest, Conflict, Unauthorized
+from app.core.money import from_paise
 from app.modules.payments.charges import (
     payment_for_razorpay_order,
     record_capture,
     record_failure,
 )
-from app.modules.payments.models import Payment, PaymentKind, PaymentStatus
+from app.modules.payments.models import (
+    Payment,
+    PaymentKind,
+    PaymentStatus,
+    RefundDestination,
+)
+from app.modules.payments.refunds import RefundSink, refund, refund_for_razorpay_id
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +53,16 @@ WRONG_ACCOUNT = "That payment was not collected by this account."
 
 CAPTURED = "payment.captured"
 FAILED = "payment.failed"
+# `refund.processed` means the money has left the account. `refund.created`
+# means Razorpay accepted the instruction and it can still fail, so recording
+# that one would show the student a refund they may never receive.
+REFUNDED = "refund.processed"
 
 # Razorpay sends a great many event types. Anything not named here is
 # acknowledged and ignored -- refusing unknown events would have Razorpay retry
 # them forever, and a 500 on an event we simply do not care about is noise that
 # hides the deliveries that matter.
-HANDLED_EVENTS = frozenset({CAPTURED, FAILED})
+HANDLED_EVENTS = frozenset({CAPTURED, FAILED, REFUNDED})
 
 
 class Settlement(Protocol):
@@ -70,6 +81,9 @@ class Settlement(Protocol):
     def settle_subscription(self, db: Session, payment: Payment) -> None: ...
 
 
+REFUND_AT_RAZORPAY = "Refunded from the Razorpay dashboard."
+
+
 @dataclass(frozen=True)
 class WebhookOutcome:
     """What was done, for the endpoint to log and answer 200 to."""
@@ -86,6 +100,7 @@ def handle_webhook(
     signature: str | None,
     secret: str,
     settlement: Settlement,
+    refund_sink: RefundSink | None = None,
     collecting_user_id: int | None = None,
     now: datetime | None = None,
 ) -> WebhookOutcome:
@@ -117,11 +132,13 @@ def handle_webhook(
     if event not in HANDLED_EVENTS:
         return WebhookOutcome(event, False, "event not handled")
 
-    entity = (
-        payload.get("payload", {}).get("payment", {}).get("entity", {})
-        if isinstance(payload.get("payload"), dict)
-        else {}
-    )
+    container = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+    entity = container.get("payment", {}).get("entity", {})
+    # Razorpay puts both entities in a refund event, so the payment is still
+    # found by its order id -- one lookup path, and the wrong-account check
+    # below keeps working unchanged rather than needing a second version.
+    refund_entity = container.get("refund", {}).get("entity", {})
+
     razorpay_order_id = entity.get("order_id")
     razorpay_payment_id = entity.get("id")
 
@@ -147,6 +164,11 @@ def handle_webhook(
         )
         raise Unauthorized(WRONG_ACCOUNT)
 
+    if event == REFUNDED:
+        return _record_external_refund(
+            db, payment, refund_entity, refund_sink=refund_sink
+        )
+
     if event == FAILED:
         if payment.status is PaymentStatus.CAPTURED:
             # Events can arrive out of order. Money that has arrived cannot be
@@ -161,6 +183,62 @@ def handle_webhook(
     record_capture(db, payment, razorpay_payment_id=razorpay_payment_id, now=now)
     _settle(db, payment, settlement)
     return WebhookOutcome(event, True, "captured and settled")
+
+
+def _record_external_refund(
+    db: Session,
+    payment: Payment,
+    refund_entity: dict,
+    *,
+    refund_sink: RefundSink | None,
+) -> WebhookOutcome:
+    """Write down a refund somebody made outside this system.
+
+    An owner can refund a student from their own Razorpay dashboard, and the
+    platform can do the same from its own. Without this the money leaves the
+    account and our books never hear: the Payment stays CAPTURED and the order
+    stays PAID, so the student has been refunded and is still owed a print.
+
+    Razorpay's refund id is both the idempotency key and the duplicate check.
+    Our own to-source refunds store it too, so a `refund.processed` for a refund
+    we issued ourselves finds the row already there and does nothing -- the same
+    id, recognised from either direction.
+    """
+    razorpay_refund_id = refund_entity.get("id")
+    amount_paise = refund_entity.get("amount")
+
+    if not razorpay_refund_id or not isinstance(amount_paise, int):
+        logger.warning("razorpay webhook: refund event carried no id or amount")
+        return WebhookOutcome(REFUNDED, False, "refund event was incomplete")
+
+    if refund_for_razorpay_id(db, razorpay_refund_id) is not None:
+        # Either a redelivery, or our own refund coming back to us as an event.
+        return WebhookOutcome(REFUNDED, False, "refund already recorded")
+
+    try:
+        refund(
+            db,
+            payment=payment,
+            amount=from_paise(amount_paise),
+            destination=RefundDestination.SOURCE,
+            idempotency_key=f"rzp:{razorpay_refund_id}",
+            external_refund_id=razorpay_refund_id,
+            reason=REFUND_AT_RAZORPAY,
+            sink=refund_sink,
+        )
+    except (BadRequest, Conflict) as exc:
+        # A verified event we cannot honour -- an amount larger than we ever
+        # captured, most likely a payment reconciled by hand. Acknowledged, so
+        # Razorpay stops retrying, and logged loudly, because the books and the
+        # account now disagree and a person has to look.
+        logger.error(
+            "razorpay webhook: refund %s could not be recorded: %s",
+            razorpay_refund_id,
+            exc,
+        )
+        return WebhookOutcome(REFUNDED, False, "refund could not be recorded")
+
+    return WebhookOutcome(REFUNDED, True, "refund recorded")
 
 
 def _settle(db: Session, payment: Payment, settlement: Settlement) -> None:

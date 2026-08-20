@@ -1,7 +1,7 @@
 {
-  "verified_at": "2026-08-16",
-  "tests": 902,
-  "contracts": 9,
+  "verified_at": "2026-08-21",
+  "tests": 949,
+  "contracts": 10,
   "ruff": "clean",
   "done": [
     "core",
@@ -11,13 +11,16 @@
     "billing",
     "printing",
     "orders",
-    "wallet"
+    "wallet",
+    "razorpay"
   ],
-  "next": "razorpay-refunds",
+  "next": "ops",
   "remaining": [
-    "razorpay",
     "ops",
+    "student-api",
+    "owner-api",
     "admin-api",
+    "razorpay-http-client",
     "device-ws",
     "migration",
     "agent",

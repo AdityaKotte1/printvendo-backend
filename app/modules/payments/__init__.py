@@ -64,6 +64,7 @@ from app.modules.payments.refunds import (
     RefundSink,
     refund,
     refund_for_key,
+    refund_for_razorpay_id,
     refunds_for,
 )
 from app.modules.payments.signatures import (
@@ -111,6 +112,7 @@ __all__ = [
     "record_wallet_payment",
     "refund",
     "refund_for_key",
+    "refund_for_razorpay_id",
     "refunds_for",
     "request_change",
     "review_change",

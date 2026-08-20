@@ -31,6 +31,8 @@ from app.modules.kiosks import (
     consume_paper,
     kiosk_scope,
 )
+from app.modules.orders import apply_payment_refund
+from app.modules.payments import Payment, Refund, RefundSink
 from app.modules.payments.gate import GateBilling
 from app.modules.printing import DocumentStore
 
@@ -212,3 +214,34 @@ def get_band_source() -> BandSource:
     reversible while a misrouted payment is neither.
     """
     return PlatformBand()
+
+
+class OrderRefundSink:
+    """Tells the orders module that money it was paid has gone back.
+
+    The adapter lives here for the same reason `KioskPaperLedger` does: payments
+    declares what it needs (`RefundSink`), orders owns the state, and payments
+    must not import orders -- it would be a cycle, since orders already calls
+    the payment gate. The `payments-does-not-know-what-it-paid-for` contract
+    fails the build if anyone shortens the path.
+
+    Stateless, so one instance serves every request.
+    """
+
+    def on_refund(self, db: Session, payment: Payment, refund: Refund) -> None:
+        apply_payment_refund(
+            db,
+            order_id=payment.order_id,
+            refunded_inr=payment.refunded_inr,
+            paid_inr=payment.amount_inr,
+        )
+
+
+def get_refund_sink() -> RefundSink:
+    """What a refund means for whatever was paid for.
+
+    A real implementation rather than a placeholder: `OrderState.REFUNDED` was
+    a value the enum could hold and nothing ever set, which is the legacy
+    audit's `REFUND_PENDING` in a new place.
+    """
+    return OrderRefundSink()
