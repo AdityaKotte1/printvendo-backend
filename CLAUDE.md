@@ -108,6 +108,23 @@ Copy `.env.example` to `.env` and fill it. The app refuses to boot with a
   irreversible. `PlatformBand` fails *open* — an unbounded price band lets an
   owner set a silly price, which is visible and reversible. Do not "fix" either
   to match the other.
+- **A refund's destination is read off the Payment, never re-derived.**
+  `collecting_user_id` is the gate's answer recorded at checkout. Platform money
+  may go to the wallet or back to source; an owner's money may only go back to
+  source, because the platform cannot credit a balance against rupees it never
+  held. The old backend had `refunds` as one of three services independently
+  deciding whose Razorpay collects.
+- **The refund idempotency key is looked up before any validation.** Not after.
+  A fully-refunded payment is REFUNDED with nothing left to give back, so a
+  retry validated first is refused for exceeding the captured amount -- and the
+  caller, told their refund failed when it had succeeded, issues another with a
+  fresh key. Verified: moving the lookup below the checks fails exactly two
+  tests. The same key is passed to Razorpay, so both sides agree on "done".
+- **`payments` must not import `orders`.** Orders imports payments, so the
+  refund's effect on an order comes back through the `RefundSink` protocol,
+  wired at the composition root. Enforced by the
+  `payments-does-not-know-what-it-paid-for` contract rather than by the sentence
+  in the module docstring that used to be the only thing holding it.
 - **Enum columns use `core.db.EnumText`.** A `Mapped[SomeEnum]` column typed as
   a bare `String` returns a plain `str` after a database round-trip. These are
   StrEnums, so `value == Enum.X` still passes and tests stay green, while
@@ -133,7 +150,7 @@ Read this before continuing the build. It is the method, not a preference.
 
 ## State of play
 
-**756 tests passing, 7 import contracts kept, ruff clean.** Verify with:
+**929 tests passing, 10 import contracts kept, ruff clean.** Verify with:
 
 ```bash
 .venv/Scripts/python -m pytest -q && .venv/Scripts/lint-imports && .venv/Scripts/python -m ruff check .
@@ -146,22 +163,25 @@ Read this before continuing the build. It is the method, not a preference.
 | `app/core/` | config, db (+`EnumText`), ids, money, errors, crypto, security, notifier |
 | `identity/` | users, roles, sessions with rotation + reuse detection, password/Google/guest sign-in, email verification, password reset |
 | `kiosks/` | registry, types, onboarding + LIVE gate, pricing bands, paper (incl. consumption from device-reported sheets), assignments, consent-based staff invites, **the scope resolver** |
-| `payments/` | owner Razorpay keys encrypted at rest, set-once with approval, **the payment gate** |
+| `payments/` | owner Razorpay keys encrypted at rest, set-once with approval, **the payment gate**, checkout + capture, in-house signature verification, one webhook per collecting account, **refunds** |
 | `billing/` | plans, subscriptions, trials, per-owner discounts (D13), one quote function |
+| `orders/` | **the aggregate** — payment and print tasks commit together, so "paid but never printed" is unreachable; quotes + gateway fee, wallet and gateway as two branches into one commit, expiry that releases reserved paper |
+| `wallet/` | ledger-as-record with the balance derived from it, double-spend refused by a conditional UPDATE rather than a read-check-write, `UNIQUE (wallet_id, reference)` for replayed webhooks |
 | `printing/` | print options + the one workload calculation, Document and PrintTask models, **atomic claim with `FOR UPDATE SKIP LOCKED`** and lease recovery, storage (opaque keys), PDF pipeline (Ghostscript under `-dSAFER`), task progress + paper from device-reported sheets, photo→A4 layout, retention |
 | `api/` | `deps`, `student/auth|staff|documents`, `owner/kiosks`, `refiller/kiosks`, `device/agent|tasks` — 45 routes, all in `tests/authz/matrix.py` |
 
 ### Not built yet, in dependency order
 
-1. **orders** — the `Order` aggregate; payment and print tasks commit together.
-   This is what makes "paid but never printed" unreachable.
-2. **wallet** — ledger-as-record, balance derived, top-ups, holds
-3. **Razorpay charging + refunds + webhook** (one endpoint, one secret)
-4. **ops** — admin alerts, audit, analytics, exports
-5. **admin API layer** — `/v1/admin/*`
-6. **device WebSocket hub** — needs Redis, deferred to staging by the operator
-7. **migration** from `printit_legacy` (restored locally from a prod dump)
-8. **cutover** — agent rewrite, staging, freeze window
+1. **Refunding a wallet-paid order.** Gateway refunds are done. A wallet-paid
+   order writes no `Payment` row -- `pay_with_wallet` debits and sets
+   `payment_reference` to the order's public id -- so `payments.refund` cannot
+   reach it, and today such an order cannot be refunded at all. Deciding where
+   that reversal lives is an open design question, not an oversight.
+2. **ops** — admin alerts, audit, analytics, exports
+3. **admin API layer** — `/v1/admin/*`
+4. **device WebSocket hub** — needs Redis, deferred to staging by the operator
+5. **migration** from `printit_legacy` (restored locally from a prod dump)
+6. **cutover** — agent rewrite, staging, freeze window
 
 ### Blocked on the operator
 

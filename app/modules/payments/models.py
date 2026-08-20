@@ -221,3 +221,68 @@ class Payment(Base):
     captured_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class RefundDestination(StrEnum):
+    """Where refunded money goes.
+
+    SOURCE returns it the way it arrived -- the card or UPI account that paid.
+    WALLET credits platform balance instead, which is faster for the student and
+    is only ever legal when the platform was the one holding the money.
+    """
+
+    SOURCE = "source"
+    WALLET = "wallet"
+
+
+class Refund(Base):
+    """Money given back, in whole or in part.
+
+    A row per refund rather than a running total on the payment, because
+    partial refunds are real -- one document of three failed to print -- and
+    "how much was given back" is a worse answer than "what was given back, when,
+    by whom, and why".
+    """
+
+    __tablename__ = "refunds"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Its own prefix, not the payment's. Two objects sharing one prefix is how
+    # a caller passes a refund id where a payment id belongs and parse_id says
+    # nothing -- the exact confusion opaque prefixed ids exist to prevent.
+    public_id: Mapped[str] = mapped_column(
+        String(24), unique=True, index=True, default=lambda: new_id(IdPrefix.REFUND)
+    )
+
+    payment_id: Mapped[int] = mapped_column(
+        ForeignKey("payments.id", ondelete="RESTRICT"), index=True
+    )
+
+    amount_inr: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    destination: Mapped[RefundDestination] = mapped_column(
+        EnumText(RefundDestination, 12)
+    )
+
+    # What makes a retried refund a no-op rather than a second one. The caller
+    # supplies it; the same key at a second attempt finds the row already written
+    # rather than issuing the refund again. Razorpay's own idempotency key is
+    # wired through to the gateway for the to-source leg, so the two agree.
+    idempotency_key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+
+    # Razorpay's id for a to-source refund. Null for a wallet credit, which
+    # never leaves our books. Unique so a retried call cannot record two.
+    razorpay_refund_id: Mapped[str | None] = mapped_column(
+        String(64), unique=True, nullable=True, index=True
+    )
+
+    # An operator refunding money is a thing somebody did, not a thing that
+    # happened. Null when the system did it -- a failed print refunding itself.
+    actor_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+    legacy_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )

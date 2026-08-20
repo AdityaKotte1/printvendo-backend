@@ -68,6 +68,19 @@ class RazorpayGateway(Protocol):
         """Open an order and return its razorpay_order_id."""
         ...
 
+    def refund(
+        self, *, razorpay_payment_id: str, amount_paise: int, idempotency_key: str
+    ) -> str:
+        """Return money to its source and return Razorpay's refund id.
+
+        `idempotency_key` is our own key, passed through so that a retry after a
+        timeout is the same refund on their side as on ours rather than a second
+        one. It is declared here rather than on a separate protocol because a
+        gateway that can take money and cannot give it back is not one this
+        module can use.
+        """
+        ...
+
 
 @dataclass(frozen=True)
 class Collection:

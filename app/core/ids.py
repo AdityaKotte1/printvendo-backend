@@ -24,6 +24,7 @@ class IdPrefix(StrEnum):
     ORDER = "ord"
     PRINT_TASK = "tsk"
     PAYMENT = "pay"
+    REFUND = "rfd"
     WALLET_ENTRY = "wlt"
     SUBSCRIPTION = "sub"
     ALERT = "alr"
