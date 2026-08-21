@@ -73,6 +73,12 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     # takings.
     ("POST", "/v1/webhooks/razorpay"): {PUBLIC},
     ("POST", "/v1/webhooks/razorpay/{owner_id}"): {PUBLIC},
+    # ── owner earnings and orders ───────────────────────────────────────────
+    # ADMIN alongside OWNER, as everywhere in this router: admin is not a second
+    # surface, it is the same routes with a wider kiosk scope.
+    ("GET", "/v1/owner/earnings"): {OWNER, ADMIN},
+    ("GET", "/v1/owner/earnings/by-kiosk"): {OWNER, ADMIN},
+    ("GET", "/v1/owner/kiosks/{kiosk_id}/orders"): {OWNER, ADMIN},
     # ── owner payment configuration ─────────────────────────────────────────
     # OWNER only, and not ADMIN: these act on *the caller's own* Razorpay
     # account, resolved from their token. An admin reaching them would be

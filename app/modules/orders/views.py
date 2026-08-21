@@ -144,6 +144,34 @@ def order_for(db: Session, *, user_id: int, public_id: str) -> Order | None:
     ).scalar_one_or_none()
 
 
+def orders_at_kiosks(
+    db: Session, *, kiosk_ids: list[int], limit: int = 50
+) -> list[OrderView]:
+    """Orders placed at these kiosks, newest first.
+
+    An empty id list returns nothing rather than everything. That distinction is
+    the difference between an owner with no kiosks seeing an empty page and one
+    seeing every order on the platform, and it is the shape of accident that a
+    scoped read exists to prevent.
+
+    The view carries no student identity -- there is no name, email or user id on
+    `OrderView` -- so this is safe to hand to a shop owner as it stands.
+    """
+    if not kiosk_ids:
+        return []
+
+    orders = list(
+        db.execute(
+            select(Order)
+            .where(Order.kiosk_id.in_(kiosk_ids))
+            .order_by(Order.created_at.desc(), Order.id.desc())
+            .limit(limit)
+        ).scalars()
+    )
+    kiosks, documents = _public_ids(db, orders)
+    return [_view(o, kiosks, documents) for o in orders]
+
+
 def orders_of(db: Session, *, user_id: int, limit: int = 50) -> list[OrderView]:
     """This student's orders, newest first."""
     orders = list(

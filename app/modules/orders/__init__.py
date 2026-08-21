@@ -40,6 +40,7 @@ from app.modules.orders.views import (
     OrderLineView,
     OrderView,
     order_for,
+    orders_at_kiosks,
     orders_of,
     view_of,
 )
@@ -63,6 +64,7 @@ __all__ = [
     "expire_stale_orders",
     "gateway_fee",
     "order_for",
+    "orders_at_kiosks",
     "orders_of",
     "mark_paid",
     "pay_with_wallet",

@@ -70,6 +70,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from app.api import webhooks
     from app.api.device import agent as device_agent
     from app.api.device import tasks as device_tasks
+    from app.api.owner import earnings as owner_earnings
     from app.api.owner import kiosks as owner_kiosks
     from app.api.owner import payment_config as owner_payment_config
     from app.api.refiller import kiosks as refiller_kiosks
@@ -87,6 +88,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(student_orders.router)
     app.include_router(student_wallet.router)
     app.include_router(owner_kiosks.router)
+    app.include_router(owner_earnings.router)
     app.include_router(owner_payment_config.router)
     app.include_router(refiller_kiosks.router)
     app.include_router(device_agent.router)

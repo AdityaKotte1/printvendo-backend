@@ -1,6 +1,6 @@
 {
   "verified_at": "2026-08-21",
-  "tests": 1080,
+  "tests": 1102,
   "contracts": 11,
   "ruff": "clean",
   "done": [
@@ -14,11 +14,11 @@
     "wallet",
     "razorpay",
     "student-api",
-    "ops"
+    "ops",
+    "owner-api"
   ],
-  "next": "owner-api",
+  "next": "admin-api",
   "remaining": [
-    "owner-api",
     "admin-api",
     "device-ws",
     "migration",

@@ -382,3 +382,50 @@ class WebhookEndpointResponse(BaseModel):
 
     url: str
     events: list[str]
+
+
+# ── what an owner is shown ──────────────────────────────────────────────────
+
+
+class EarningsResponse(BaseModel):
+    """Money in, money back, and the difference.
+
+    `net_inr` may be negative -- refunds today against takings from last week.
+    Reported rather than clamped: the old backend wrapped it in max(0, ...),
+    which hid the one case somebody has to act on.
+    """
+
+    gross_inr: Decimal
+    refunded_inr: Decimal
+    net_inr: Decimal
+    order_count: int
+
+
+class KioskEarningsResponse(BaseModel):
+    kiosk_id: str
+    kiosk_name: str
+    earnings: EarningsResponse
+
+
+class OwnerOrderResponse(BaseModel):
+    """One job printed at an owner's shop.
+
+    No name, no email, no user id -- absent rather than stripped. A shop owner
+    has a legitimate interest in what was printed and what it cost, and none at
+    all in who printed it, and a type with no field for a person cannot leak one
+    however this is later edited. The same reasoning as
+    `RefillerKioskResponse` having no price fields.
+
+    No filenames either: a document title is often the most identifying thing
+    about a job.
+    """
+
+    id: str
+    state: str
+    payment_method: str | None
+    total_inr: Decimal
+    sheets: int
+    document_count: int
+    paid_at: datetime | None
+    refunded_at: datetime | None
+    created_at: datetime

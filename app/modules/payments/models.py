@@ -170,6 +170,27 @@ class PaymentStatus(StrEnum):
     PARTIALLY_REFUNDED = "partially_refunded"
 
 
+# Whether money actually arrived. **One definition, used by every consumer.**
+#
+# In the backend being replaced this predicate was written out at each call
+# site and the copies disagreed: `wallet.py` and `printers.py` counted only
+# `PAID`, while `kiosk.py` counted `PAID` and `CAPTURED` -- so an owner's
+# earnings page and their kiosk page reported different revenue for the same
+# day, and neither was wrong by its own definition.
+#
+# A refunded payment is still money that arrived; what went back is
+# `refunded_inr`, subtracted separately. Collapsing the two is how a full
+# refund makes a sale disappear from history rather than showing as a sale and
+# a refund.
+SETTLED_PAYMENT_STATES = frozenset(
+    {
+        PaymentStatus.CAPTURED,
+        PaymentStatus.PARTIALLY_REFUNDED,
+        PaymentStatus.REFUNDED,
+    }
+)
+
+
 class Payment(Base):
     """One sum the student paid, however they paid it.
 
