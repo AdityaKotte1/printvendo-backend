@@ -140,6 +140,17 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     ("GET", "/v1/admin/alerts"): {ADMIN},
     ("POST", "/v1/admin/alerts/{alert_id}/resolve"): {ADMIN},
     ("GET", "/v1/admin/audit"): {ADMIN},
+    # A kiosk's life. Creating one decides what it is, and therefore whose
+    # Razorpay collects at it; changing its type decides that again. An owner
+    # who could reach either would point a platform kiosk's takings at
+    # themselves. The stage route is the whole ladder, where the owner surface
+    # has only LIVE and MAINTENANCE -- wider scope, not a bypass: the same
+    # `move_to` refuses the same transitions for both.
+    ("POST", "/v1/admin/kiosks"): {ADMIN},
+    ("GET", "/v1/admin/kiosks/{kiosk_id}"): {ADMIN},
+    ("POST", "/v1/admin/kiosks/{kiosk_id}/stage"): {ADMIN},
+    ("PUT", "/v1/admin/kiosks/{kiosk_id}/type"): {ADMIN},
+    ("POST", "/v1/admin/kiosks/{kiosk_id}/owner"): {ADMIN},
     # ── device ──────────────────────────────────────────────────────────────
     # /register is PUBLIC by necessity: a machine being installed has no token
     # yet. The enrolment code it must present is single-use, short-lived, and

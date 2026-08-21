@@ -45,7 +45,22 @@ from app.modules.kiosks.pricing import (
     read_pricing,
     set_pricing,
 )
+from app.modules.kiosks.registry import (
+    change_type,
+    create_kiosk,
+    rename_kiosk,
+    set_accepts_wallet,
+    set_active,
+    set_location,
+)
 from app.modules.kiosks.scope import Scope, kiosk_scope
+from app.modules.kiosks.staffing import (
+    accept_invite,
+    invite_staff,
+    list_staff,
+    revoke_invite,
+    unassign,
+)
 
 __all__ = [
     "ENROLMENT_LIFETIME",
@@ -81,5 +96,16 @@ __all__ = [
     "revoke_device",
     "rotate_token",
     "set_pricing",
+    "accept_invite",
+    "change_type",
+    "create_kiosk",
+    "invite_staff",
+    "list_staff",
+    "rename_kiosk",
+    "revoke_invite",
+    "set_accepts_wallet",
+    "set_active",
+    "set_location",
+    "unassign",
     "sheets_remaining",
 ]

@@ -505,3 +505,56 @@ class AuditEntryResponse(BaseModel):
     after: dict | None
     note: str | None
     created_at: datetime
+
+
+# ── admin: a kiosk's life ───────────────────────────────────────────────────
+
+
+class AdminKioskResponse(BaseModel):
+    """A kiosk as the people who install and retire them see it.
+
+    The one field the owner's view has no business carrying: **who owns it**.
+    An admin decides which shop a kiosk belongs to, and an ownerless SOLD kiosk
+    -- production has exactly one, quietly routing its takings to the platform
+    -- is a thing this surface has to be able to show.
+    """
+
+    id: str
+    name: str
+    kiosk_type: str
+    onboarding_stage: str
+    onboarding_note: str | None
+    is_active: bool
+    is_selling: bool
+    accepts_wallet: bool
+    location_description: str | None
+    owner_id: str | None
+    owner_email: str | None
+    paper: PaperResponse
+
+
+class CreateKioskRequest(BaseModel):
+    name: str
+    # Defaults to the platform's own: a kiosk nobody has been told they own is
+    # one whose money is ours to collect, which is the safe direction. Making it
+    # SOLD by mistake would point takings at an account that does not exist.
+    kiosk_type: str = "platform"
+    location_description: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    paper_capacity: int | None = None
+
+
+class StageChangeRequest(BaseModel):
+    stage: str
+    # Why it moved, kept on the kiosk for whoever reads it next -- "waiting on
+    # the shop's GST number" is the difference between a queue and a mystery.
+    note: str | None = None
+
+
+class KioskTypeChangeRequest(BaseModel):
+    type: str
+
+
+class InviteOwnerRequest(BaseModel):
+    email: str

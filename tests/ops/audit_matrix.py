@@ -96,6 +96,13 @@ AUDIT_MATRIX: dict[tuple[str, str], tuple[str, str]] = {
     # would be a second, weaker copy of one fact, and the two would eventually
     # disagree -- which is the shape of most of the legacy audit.
     ("POST", "/v1/admin/alerts/{alert_id}/resolve"): (EXEMPT, RECORDED_ELSEWHERE),
+    # "Who put this shop live, and when" is the first question asked when money
+    # turns up in the wrong account. The kiosk row holds the current stage and
+    # type; only the trail holds who moved them and what they were before.
+    ("POST", "/v1/admin/kiosks"): (AUDITED, ""),
+    ("POST", "/v1/admin/kiosks/{kiosk_id}/stage"): (AUDITED, ""),
+    ("PUT", "/v1/admin/kiosks/{kiosk_id}/type"): (AUDITED, ""),
+    ("POST", "/v1/admin/kiosks/{kiosk_id}/owner"): (AUDITED, ""),
     # ── device ──────────────────────────────────────────────────────────────
     # Registration exchanges an enrolment code for a lasting token. The owner
     # side of that (`/device/enrol`) is audited above, where there is an actor;
