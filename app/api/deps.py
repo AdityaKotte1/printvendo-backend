@@ -6,6 +6,7 @@ dependency, which is how /owner/* ended up admin-only with a "DO NOT LOOSEN"
 comment instead of a check -- there was no single place to put the check.
 """
 
+import logging
 from collections.abc import Iterator
 from typing import Annotated
 
@@ -13,6 +14,7 @@ from fastapi import Depends, Request
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.core.crypto import SecretBox
 from app.core.db import get_session_factory
 from app.core.errors import Forbidden, Unauthorized
 from app.core.notifier import LoggingNotifier, Notifier
@@ -31,10 +33,20 @@ from app.modules.kiosks import (
     consume_paper,
     kiosk_scope,
 )
-from app.modules.orders import apply_payment_refund
-from app.modules.payments import Payment, Refund, RefundSink
+from app.modules.orders import apply_payment_refund, settle_paid_order
+from app.modules.payments import (
+    HttpRazorpay,
+    Payment,
+    RazorpayGateway,
+    Refund,
+    RefundSink,
+    Settlement,
+)
 from app.modules.payments.gate import GateBilling
 from app.modules.printing import DocumentStore
+from app.modules.wallet import EntryKind, credit
+
+logger = logging.getLogger(__name__)
 
 NOT_SIGNED_IN = "You need to sign in to do that."
 NOT_ALLOWED = "You do not have access to that."
@@ -245,3 +257,77 @@ def get_refund_sink() -> RefundSink:
     audit's `REFUND_PENDING` in a new place.
     """
     return OrderRefundSink()
+
+
+class WebhookSettlement:
+    """What a captured payment means, resolved at the composition root.
+
+    Payments must not import orders, wallet or billing -- it would make the
+    dependency graph cyclic and the modules inseparable -- so `handle_webhook`
+    calls this protocol instead and something above all four supplies it.
+
+    The branch taken comes from `payment.kind`, a column written when the
+    checkout was opened. That is the whole difference from the three-webhook
+    arrangement being replaced, where the purpose of a payment was inferred from
+    whichever endpoint the delivery happened to arrive at.
+    """
+
+    def settle_print_order(self, db: Session, payment: Payment) -> None:
+        settle_paid_order(
+            db,
+            order_id=payment.order_id,
+            reference=payment.razorpay_payment_id,
+            now=payment.captured_at,
+        )
+
+    def settle_wallet_topup(self, db: Session, payment: Payment) -> None:
+        # The razorpay payment id is the ledger reference, and wallet references
+        # are unique per wallet -- so a webhook delivered three times credits
+        # once, decided by the index rather than by a "have we seen this" query
+        # that two concurrent deliveries can both answer no to.
+        credit(
+            db,
+            user_id=payment.user_id,
+            amount=payment.amount_inr,
+            kind=EntryKind.TOPUP,
+            reference=payment.razorpay_payment_id or payment.public_id,
+        )
+
+    def settle_subscription(self, db: Session, payment: Payment) -> None:
+        # Unreachable today: nothing can open a SUBSCRIPTION checkout, because
+        # billing has no purchase route yet. Recorded loudly rather than passed
+        # over, so that adding the route without also adding activation shows up
+        # as a logged error against real money instead of silence.
+        logger.error(
+            "subscription payment %s captured with nothing to activate",
+            payment.public_id,
+        )
+
+
+def get_settlement() -> Settlement:
+    """What the Razorpay webhook hands a captured payment to."""
+    return WebhookSettlement()
+
+
+def get_secret_box(
+    settings: Annotated[Settings, Depends(get_settings_from_app)],
+) -> SecretBox:
+    """The key that decrypts third-party secrets at rest.
+
+    A dependency rather than a module-level singleton so a test can hand over a
+    throwaway key, and so importing this module never requires the real one.
+    """
+    return SecretBox(settings.SECRETS_ENCRYPTION_KEY)
+
+
+def get_razorpay(
+    settings: Annotated[Settings, Depends(get_settings_from_app)],
+) -> RazorpayGateway:
+    """The gateway a real student's payment goes through.
+
+    A dependency because that is what lets a test substitute the protocol and
+    exercise the whole route -- signature check included -- without a network.
+    The alternative, constructing a client inside the handler, is what makes the
+    security-critical part of a payment path the bit nobody tests.
+    """
+    return HttpRazorpay(timeout=settings.RAZORPAY_TIMEOUT_SECONDS)

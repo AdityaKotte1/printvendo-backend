@@ -31,8 +31,17 @@ from app.modules.orders.service import (
     RequestedDocument,
     expire_stale_orders,
     mark_paid,
+    pay_with_wallet,
     place_order,
+    settle_paid_order,
     sheets_available,
+)
+from app.modules.orders.views import (
+    OrderLineView,
+    OrderView,
+    order_for,
+    orders_of,
+    view_of,
 )
 
 __all__ = [
@@ -44,15 +53,22 @@ __all__ = [
     "LineQuote",
     "Order",
     "OrderItem",
+    "OrderLineView",
     "OrderQuote",
+    "OrderView",
     "OrderState",
     "PaymentMethod",
     "RequestedDocument",
     "apply_payment_refund",
     "expire_stale_orders",
     "gateway_fee",
+    "order_for",
+    "orders_of",
     "mark_paid",
+    "pay_with_wallet",
     "place_order",
+    "settle_paid_order",
     "quote_line",
     "sheets_available",
+    "view_of",
 ]

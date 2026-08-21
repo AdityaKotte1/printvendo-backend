@@ -45,6 +45,34 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     ("POST", "/v1/app/documents/photo-layout"): {STUDENT, OWNER, REFILLER, ADMIN},
     ("GET", "/v1/app/documents"): {STUDENT, OWNER, REFILLER, ADMIN},
     ("DELETE", "/v1/app/documents/{document_id}"): {STUDENT, OWNER, REFILLER, ADMIN},
+    # ── student kiosks, orders and wallet ───────────────────────────────────
+    # Browsing shops is not a scope question. `kiosk_scope` answers "which
+    # kiosks may this person manage", and a student manages none -- so these
+    # routes deliberately do not use it, and every signed-in audience sees the
+    # same list of shops that can currently print.
+    ("GET", "/v1/app/kiosks"): {STUDENT, OWNER, REFILLER, ADMIN},
+    ("GET", "/v1/app/kiosks/{kiosk_id}"): {STUDENT, OWNER, REFILLER, ADMIN},
+    # An order belongs to the person who placed it. Somebody else's is 404, not
+    # 403 -- including for an admin, who has no business reading a student's
+    # order through the student surface.
+    ("POST", "/v1/app/orders"): {STUDENT, OWNER, REFILLER, ADMIN},
+    ("GET", "/v1/app/orders"): {STUDENT, OWNER, REFILLER, ADMIN},
+    ("GET", "/v1/app/orders/{order_id}"): {STUDENT, OWNER, REFILLER, ADMIN},
+    ("POST", "/v1/app/orders/{order_id}/pay/wallet"): {STUDENT, OWNER, REFILLER, ADMIN},
+    ("POST", "/v1/app/orders/{order_id}/checkout"): {STUDENT, OWNER, REFILLER, ADMIN},
+    ("POST", "/v1/app/orders/{order_id}/verify"): {STUDENT, OWNER, REFILLER, ADMIN},
+    ("GET", "/v1/app/wallet"): {STUDENT, OWNER, REFILLER, ADMIN},
+    ("GET", "/v1/app/wallet/statement"): {STUDENT, OWNER, REFILLER, ADMIN},
+    ("POST", "/v1/app/wallet/topup"): {STUDENT, OWNER, REFILLER, ADMIN},
+    # ── webhooks ────────────────────────────────────────────────────────────
+    # PUBLIC because Razorpay holds no token of ours. The signature *is* the
+    # authentication, and it is checked against the raw body before anything is
+    # parsed. The owner form additionally refuses events about a payment a
+    # different account collected -- an owner does hold a secret that verifies
+    # here, so that second check is what stops one settling a competitor's
+    # takings.
+    ("POST", "/v1/webhooks/razorpay"): {PUBLIC},
+    ("POST", "/v1/webhooks/razorpay/{owner_id}"): {PUBLIC},
     # ── owner ───────────────────────────────────────────────────────────────
     # ADMIN appears alongside OWNER throughout because admin is not a separate
     # router here -- it is the same routes with a wider kiosk scope.

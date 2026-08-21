@@ -1,4 +1,5 @@
 import pytest
+from cryptography.fernet import Fernet
 from pydantic import ValidationError
 
 from app.core.config import Settings
@@ -8,7 +9,7 @@ BASE_ENV = {
     "DATABASE_URL": "postgresql+psycopg://u:p@localhost:5432/pv",
     "REDIS_URL": "redis://localhost:6379/0",
     "JWT_SECRET_KEY": "x" * 32,
-    "SECRETS_ENCRYPTION_KEY": "k" * 44,
+    "SECRETS_ENCRYPTION_KEY": Fernet.generate_key().decode(),
     "RAZORPAY_KEY_ID": "rzp_test_abc",
     "RAZORPAY_KEY_SECRET": "shh",
     "RAZORPAY_WEBHOOK_SECRET": "hook",
@@ -59,3 +60,25 @@ def test_prod_rejects_wildcard_cors():
 
 def test_access_token_lifetime_defaults_to_15_minutes():
     assert Settings(**BASE_ENV).ACCESS_TOKEN_MINUTES == 15
+
+
+def test_a_key_of_the_right_length_that_fernet_cannot_use_is_refused(monkeypatch):
+    """Length was the only check, so 44 characters of anything booted cleanly
+    and raised the first time an owner's Razorpay secret was read -- which is
+    the first checkout at an owner-collecting kiosk, in production, with a
+    student waiting. Refusing to start is the correct failure."""
+    import pytest
+
+    from app.core.config import Settings
+
+    with pytest.raises(ValueError, match="not a valid Fernet key"):
+        Settings(**{**BASE_ENV, "SECRETS_ENCRYPTION_KEY": "k" * 44})
+
+
+def test_a_real_generated_key_is_accepted():
+    from app.core.config import Settings
+
+    settings = Settings(
+        **{**BASE_ENV, "SECRETS_ENCRYPTION_KEY": Fernet.generate_key().decode()}
+    )
+    assert settings.SECRETS_ENCRYPTION_KEY

@@ -54,6 +54,22 @@ def get_kiosk(db: Session, scope: Scope, public_id: str) -> Kiosk:
     return kiosk
 
 
+def kiosk_by_internal_id(db: Session, scope: Scope, kiosk_id: int) -> Kiosk:
+    """The kiosk another context recorded a foreign key to.
+
+    Orders holds `kiosk_id` as a numeric column and has no relationship to this
+    table -- a relationship would be an import of it, which the module contracts
+    forbid. So the composition root resolves it here, through the same scope
+    every other read takes: there is still no unscoped read in the codebase.
+
+    Out of scope is `NotFound`, byte-identical to a kiosk that never existed.
+    """
+    kiosk = db.execute(select(Kiosk).where(Kiosk.id == kiosk_id)).scalar_one_or_none()
+    if kiosk is None or not scope.allows(kiosk.id):
+        raise NotFound(NO_SUCH_KIOSK)
+    return kiosk
+
+
 def list_refill_logs(db: Session, kiosk: Kiosk, *, limit: int = 50) -> list[PaperRefillLog]:
     """Paper history for one kiosk, newest first.
 

@@ -1,4 +1,5 @@
 import pytest
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from app.api.deps import get_db, get_notifier, get_secret
@@ -12,7 +13,7 @@ SETTINGS = Settings(
     DATABASE_URL="postgresql+psycopg://u:p@localhost:5432/pv",
     REDIS_URL="redis://localhost:6379/0",
     JWT_SECRET_KEY=SECRET,
-    SECRETS_ENCRYPTION_KEY="k" * 44,
+    SECRETS_ENCRYPTION_KEY=Fernet.generate_key().decode(),
     CORS_ORIGINS="http://localhost:3000",
 )
 

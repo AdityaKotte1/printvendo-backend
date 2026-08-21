@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     RAZORPAY_KEY_ID: str = ""
     RAZORPAY_KEY_SECRET: str = ""
     RAZORPAY_WEBHOOK_SECRET: str = ""
+    # A student is waiting on this request, so the gateway does not get to hang
+    # for the default socket timeout. A refused checkout they can retry beats a
+    # spinner that never resolves.
+    RAZORPAY_TIMEOUT_SECONDS: float = 20.0
 
     GOOGLE_CLIENT_ID: str = ""
     VAPID_PUBLIC_KEY: str = ""
@@ -73,6 +77,29 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+
+    @model_validator(mode="after")
+    def _encryption_key_must_actually_work(self) -> "Settings":
+        """A key of the right length that Fernet cannot use is not a key.
+
+        Length alone was the only check, so 44 characters of anything booted
+        cleanly and then raised the first time an owner's Razorpay secret was
+        read or written -- which is the first checkout at an owner-collecting
+        kiosk, in production, with a student waiting. Failing here instead
+        turns a silent misconfiguration into a refusal to start.
+        """
+        from app.core.crypto import SecretBox
+
+        try:
+            SecretBox(self.SECRETS_ENCRYPTION_KEY)
+        except Exception as exc:
+            raise ValueError(
+                "SECRETS_ENCRYPTION_KEY is not a valid Fernet key. "
+                "Generate one with: "
+                "python -c \"from cryptography.fernet import Fernet; "
+                "print(Fernet.generate_key().decode())\""
+            ) from exc
+        return self
 
     @model_validator(mode="after")
     def _production_requires_real_secrets(self) -> "Settings":

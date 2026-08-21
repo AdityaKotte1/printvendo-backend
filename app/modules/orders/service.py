@@ -305,6 +305,34 @@ def mark_paid(
     return tasks
 
 
+def settle_paid_order(
+    db: Session,
+    *,
+    order_id: int | None,
+    reference: str | None,
+    now: datetime | None = None,
+) -> list[PrintTask]:
+    """Mark the order this gateway payment was for as paid, and queue its prints.
+
+    Takes an id rather than an Order because the caller is the composition root
+    settling a webhook, and the api layer may not touch another module's ORM
+    models. Orders owns the table, so orders does the lookup.
+
+    Returns an empty list when there is nothing to settle -- a payment whose
+    order has been expired or removed. The money has still arrived and is still
+    recorded; what it bought no longer exists, which is a refund question rather
+    than an error to raise inside a webhook.
+    """
+    if order_id is None:
+        return []
+
+    order = db.execute(select(Order).where(Order.id == order_id)).scalar_one_or_none()
+    if order is None:
+        return []
+
+    return mark_paid(db, order, reference=reference, now=now)
+
+
 # ── expiry ──────────────────────────────────────────────────────────────────
 
 

@@ -11,6 +11,7 @@ Two rules encoded here rather than trusted to each handler:
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -221,3 +222,126 @@ class DocumentResponse(BaseModel):
     byte_size: int | None
     state: str
     created_at: datetime
+
+
+# ── kiosks a student may print at ───────────────────────────────────────────
+
+
+class StudentKioskResponse(BaseModel):
+    """A shop a student can send a job to.
+
+    Prices are here because a student decides with them. Nothing about the
+    owner is: not their name, not their id, not whose Razorpay collects. A
+    student has no business knowing which shops share an owner, and a type that
+    has no field for it cannot leak it by accident.
+    """
+
+    id: str
+    name: str
+    accepts_wallet: bool
+    is_out_of_paper: bool
+    sheets_remaining: int
+    price_bw_single: Decimal
+    price_bw_double: Decimal
+    price_color_single: Decimal
+    price_color_double: Decimal
+
+
+# ── orders ──────────────────────────────────────────────────────────────────
+
+
+class OrderLineRequest(BaseModel):
+    """One document, printed one way."""
+
+    document_id: str
+    colour: bool = False
+    duplex: bool = False
+    copies: int = 1
+    page_range: str | None = None
+
+
+class PlaceOrderRequest(BaseModel):
+    kiosk_id: str
+    payment_method: Literal["wallet", "gateway"]
+    items: list[OrderLineRequest]
+
+
+class OrderItemResponse(BaseModel):
+    document_id: str | None
+    filename: str | None
+    kind: str
+    colour: bool
+    duplex: bool
+    copies: int
+    page_range: str | None
+    page_count: int
+    sheets: int
+    amount_inr: Decimal
+
+
+class OrderResponse(BaseModel):
+    """What the student owes and what state it is in.
+
+    `total_inr` is the server's number and the only one ever charged. The web
+    app's own estimate stays an estimate -- the old backend let a client-side
+    price reach the gateway.
+    """
+
+    id: str
+    kiosk_id: str
+    state: str
+    payment_method: str | None
+    subtotal_inr: Decimal
+    fee_inr: Decimal
+    total_inr: Decimal
+    expires_at: datetime | None
+    paid_at: datetime | None
+    refunded_at: datetime | None
+    created_at: datetime
+    items: list[OrderItemResponse]
+
+
+class CheckoutResponse(BaseModel):
+    """Everything the browser needs to open Razorpay, and nothing more.
+
+    `key_id` is not a secret -- it is in the checkout the student sees anyway.
+    The key *secret* has no field here and never leaves the server.
+    """
+
+    razorpay_order_id: str
+    razorpay_key_id: str
+    amount_inr: Decimal
+    order_id: str
+
+
+class VerifyPaymentRequest(BaseModel):
+    """The browser handing back what Razorpay gave it.
+
+    Verified against the key that opened the order. A callback that does not
+    verify changes nothing at all, so a forged one cannot advance an order
+    towards being printed.
+    """
+
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+
+
+# ── wallet ──────────────────────────────────────────────────────────────────
+
+
+class WalletResponse(BaseModel):
+    balance_inr: Decimal
+
+
+class WalletEntryResponse(BaseModel):
+    id: str
+    kind: str
+    amount_inr: Decimal
+    balance_after_inr: Decimal
+    note: str | None
+    created_at: datetime
+
+
+class TopUpRequest(BaseModel):
+    amount_inr: Decimal
