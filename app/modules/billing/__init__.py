@@ -14,6 +14,13 @@ from app.modules.billing.bands import (
     PlanPriceBand,
     price_band_for,
 )
+from app.modules.billing.discounts import (
+    clear_owner_discount,
+    owner_discounts,
+    plan_discounts,
+    set_owner_discount,
+    set_plan_discount,
+)
 from app.modules.billing.models import (
     OwnerDiscount,
     Plan,
@@ -21,13 +28,24 @@ from app.modules.billing.models import (
     Subscription,
     SubscriptionStatus,
 )
-from app.modules.billing.quotes import Quote, quote_subscription
+from app.modules.billing.plans import (
+    active_plans,
+    all_plans,
+    create_plan,
+    plan_by_public_id,
+    update_plan,
+)
+from app.modules.billing.quotes import ALLOWED_DURATIONS, Quote, quote_subscription
 from app.modules.billing.subscriptions import (
     active_subscription,
     effective_end,
+    end_trial,
+    grant_trial,
     has_active_subscription,
     is_in_force,
     is_on_trial,
+    set_negotiated_price,
+    subscriptions_of,
 )
 
 __all__ = [
@@ -45,5 +63,20 @@ __all__ = [
     "is_in_force",
     "is_on_trial",
     "price_band_for",
+    "ALLOWED_DURATIONS",
+    "active_plans",
+    "all_plans",
+    "clear_owner_discount",
+    "create_plan",
+    "end_trial",
+    "grant_trial",
+    "owner_discounts",
+    "plan_by_public_id",
+    "plan_discounts",
+    "set_negotiated_price",
+    "set_owner_discount",
+    "set_plan_discount",
+    "subscriptions_of",
+    "update_plan",
     "quote_subscription",
 ]

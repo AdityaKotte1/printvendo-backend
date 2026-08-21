@@ -103,6 +103,20 @@ AUDIT_MATRIX: dict[tuple[str, str], tuple[str, str]] = {
     ("POST", "/v1/admin/kiosks/{kiosk_id}/stage"): (AUDITED, ""),
     ("PUT", "/v1/admin/kiosks/{kiosk_id}/type"): (AUDITED, ""),
     ("POST", "/v1/admin/kiosks/{kiosk_id}/owner"): (AUDITED, ""),
+    # Commercial terms. A rate nobody can explain in a year's time is a rate
+    # somebody will argue about, and the row holds only the current figure --
+    # who granted it, when, and what it replaced live here or nowhere.
+    ("POST", "/v1/admin/plans"): (AUDITED, ""),
+    ("PATCH", "/v1/admin/plans/{plan_id}"): (AUDITED, ""),
+    ("PUT", "/v1/admin/plans/{plan_id}/discounts"): (AUDITED, ""),
+    ("POST", "/v1/admin/owners/{owner_id}/billing/trial"): (AUDITED, ""),
+    ("DELETE", "/v1/admin/owners/{owner_id}/billing/trial"): (AUDITED, ""),
+    ("PUT", "/v1/admin/owners/{owner_id}/billing/price"): (AUDITED, ""),
+    ("PUT", "/v1/admin/owners/{owner_id}/billing/discounts"): (AUDITED, ""),
+    (
+        "DELETE",
+        "/v1/admin/owners/{owner_id}/billing/discounts/{duration_months}",
+    ): (AUDITED, ""),
     # ── device ──────────────────────────────────────────────────────────────
     # Registration exchanges an enrolment code for a lasting token. The owner
     # side of that (`/device/enrol`) is audited above, where there is an actor;

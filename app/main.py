@@ -68,6 +68,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # `import app.main` pull in the whole route tree, and tests/authz builds an
     # app purely to enumerate routes.
     from app.api import webhooks
+    from app.api.admin import billing as admin_billing
     from app.api.admin import kiosks as admin_kiosks
     from app.api.admin import ops as admin_ops
     from app.api.admin import payment_config as admin_payment_config
@@ -97,6 +98,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(admin_payment_config.router)
     app.include_router(admin_ops.router)
     app.include_router(admin_kiosks.router)
+    app.include_router(admin_billing.router)
     app.include_router(device_agent.router)
     app.include_router(device_tasks.router)
     app.include_router(webhooks.router)

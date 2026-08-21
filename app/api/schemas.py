@@ -558,3 +558,126 @@ class KioskTypeChangeRequest(BaseModel):
 
 class InviteOwnerRequest(BaseModel):
     email: str
+
+
+# ── admin: plans and what one owner pays ────────────────────────────────────
+
+
+class PlanDiscountResponse(BaseModel):
+    duration_months: int
+    percent: Decimal
+
+
+class PlanResponse(BaseModel):
+    """A tier, its band, and its published discount ladder.
+
+    The band comes back with the plan because it *is* a term of the plan -- an
+    owner's kiosk prices are constrained by what they are paying for, and a
+    second copy of the floor and ceiling in a client is a copy that drifts.
+    """
+
+    id: str
+    name: str
+    monthly_price: Decimal
+    max_kiosks: int
+    price_floor_bw: Decimal | None
+    price_ceiling_bw: Decimal | None
+    price_floor_color: Decimal | None
+    price_ceiling_color: Decimal | None
+    is_active: bool
+    discounts: list[PlanDiscountResponse]
+
+
+class CreatePlanRequest(BaseModel):
+    name: str
+    monthly_price: Decimal
+    max_kiosks: int = 1
+    price_floor_bw: Decimal | None = None
+    price_ceiling_bw: Decimal | None = None
+    price_floor_color: Decimal | None = None
+    price_ceiling_color: Decimal | None = None
+
+
+class UpdatePlanRequest(BaseModel):
+    """Everything optional, and no `name`.
+
+    A plan's name is what an owner sees on an invoice they already hold.
+    Renaming it silently rewrites history, so it is not a field here.
+    """
+
+    monthly_price: Decimal | None = None
+    max_kiosks: int | None = None
+    price_floor_bw: Decimal | None = None
+    price_ceiling_bw: Decimal | None = None
+    price_floor_color: Decimal | None = None
+    price_ceiling_color: Decimal | None = None
+    is_active: bool | None = None
+
+
+class SetDiscountRequest(BaseModel):
+    duration_months: int
+    percent: Decimal
+    note: str | None = None
+
+
+class OwnerDiscountResponse(BaseModel):
+    duration_months: int
+    percent: Decimal
+    note: str | None
+
+
+class SubscriptionResponse(BaseModel):
+    """One owner's subscription as an admin needs to see it.
+
+    `on_trial` is separate from `status` on purpose: a trialling owner is
+    collecting real money into their own account while paying nothing, and a
+    console that folds that into "active" cannot show the difference.
+    """
+
+    id: str
+    plan_id: str
+    plan_name: str
+    status: str
+    on_trial: bool
+    in_force: bool
+    monthly_price_charged: Decimal
+    negotiated_price: Decimal | None
+    total_amount: Decimal
+    free_until: datetime | None
+    starts_at: datetime | None
+    expires_at: datetime | None
+
+
+class OwnerBillingResponse(BaseModel):
+    owner_id: str
+    owner_email: str
+    # Null when this owner has never had one -- not a fabricated free
+    # subscription. "This shop cannot collect" is the fact worth showing.
+    subscription: SubscriptionResponse | None
+    discounts: list[OwnerDiscountResponse]
+
+
+class GrantTrialRequest(BaseModel):
+    plan_id: str
+    days: int
+
+
+class NegotiatePriceRequest(BaseModel):
+    # Null puts this owner back on the plan's list price.
+    monthly_price: Decimal | None = None
+
+
+class QuoteResponse(BaseModel):
+    """A price and every input that produced it.
+
+    An invoice that cannot explain itself is how billing arguments start, so the
+    rate, the discount and where the discount came from all travel with the
+    total.
+    """
+
+    duration_months: int
+    monthly_price: Decimal
+    discount_percent: Decimal
+    discount_source: str
+    negotiated: bool
+    total: Decimal

@@ -151,6 +151,24 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     ("POST", "/v1/admin/kiosks/{kiosk_id}/stage"): {ADMIN},
     ("PUT", "/v1/admin/kiosks/{kiosk_id}/type"): {ADMIN},
     ("POST", "/v1/admin/kiosks/{kiosk_id}/owner"): {ADMIN},
+    # Plans and one owner's terms. A trial is not a courtesy: a subscription
+    # inside one is in force, which is half of what the payment gate requires
+    # before a SOLD kiosk collects into its owner's account. An owner able to
+    # grant themselves one could turn their own takings on.
+    ("GET", "/v1/admin/plans"): {ADMIN},
+    ("POST", "/v1/admin/plans"): {ADMIN},
+    ("PATCH", "/v1/admin/plans/{plan_id}"): {ADMIN},
+    ("PUT", "/v1/admin/plans/{plan_id}/discounts"): {ADMIN},
+    ("GET", "/v1/admin/owners/{owner_id}/billing"): {ADMIN},
+    ("GET", "/v1/admin/owners/{owner_id}/billing/quote"): {ADMIN},
+    ("POST", "/v1/admin/owners/{owner_id}/billing/trial"): {ADMIN},
+    ("DELETE", "/v1/admin/owners/{owner_id}/billing/trial"): {ADMIN},
+    ("PUT", "/v1/admin/owners/{owner_id}/billing/price"): {ADMIN},
+    ("PUT", "/v1/admin/owners/{owner_id}/billing/discounts"): {ADMIN},
+    (
+        "DELETE",
+        "/v1/admin/owners/{owner_id}/billing/discounts/{duration_months}",
+    ): {ADMIN},
     # ── device ──────────────────────────────────────────────────────────────
     # /register is PUBLIC by necessity: a machine being installed has no token
     # yet. The enrolment code it must present is single-use, short-lived, and
