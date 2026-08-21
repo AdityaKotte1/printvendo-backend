@@ -117,6 +117,13 @@ AUDIT_MATRIX: dict[tuple[str, str], tuple[str, str]] = {
         "DELETE",
         "/v1/admin/owners/{owner_id}/billing/discounts/{duration_months}",
     ): (AUDITED, ""),
+    # Who made this person an admin, and who switched that account off, are the
+    # first questions asked after an account does something it should not have
+    # been able to. Neither the user row nor the role row records who wrote it.
+    ("PUT", "/v1/admin/accounts/{account_id}/roles/{role}"): (AUDITED, ""),
+    ("DELETE", "/v1/admin/accounts/{account_id}/roles/{role}"): (AUDITED, ""),
+    ("POST", "/v1/admin/accounts/{account_id}/deactivate"): (AUDITED, ""),
+    ("POST", "/v1/admin/accounts/{account_id}/activate"): (AUDITED, ""),
     # ── device ──────────────────────────────────────────────────────────────
     # Registration exchanges an enrolment code for a lasting token. The owner
     # side of that (`/device/enrol`) is audited above, where there is an actor;

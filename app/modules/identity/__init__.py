@@ -6,6 +6,7 @@ outside may import identity.models -- that is enforced by .importlinter, not by
 convention.
 """
 
+from app.modules.identity.accounts import set_active
 from app.modules.identity.google import sign_in_with_google
 from app.modules.identity.guests import create_guest
 
@@ -30,6 +31,7 @@ __all__ = [
     "create_guest",
     "issue_tokens",
     "register",
+    "set_active",
     "revoke_all",
     "revoke_refresh",
     "rotate_refresh",

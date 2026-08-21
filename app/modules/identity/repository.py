@@ -81,3 +81,48 @@ def actors_by_id(db: Session, user_ids: set[int]) -> dict[int, User]:
 
     rows = db.execute(select(User).where(User.id.in_(user_ids))).scalars()
     return {user.id: user for user in rows}
+
+
+def find_by_email(db: Session, email: str) -> list[User]:
+    """Accounts with exactly this address, **including deactivated ones**.
+
+    Unlike `get_by_email`, which is the sign-in path and must only ever return
+    an account somebody may use. An admin looking for a person needs to find the
+    one they switched off yesterday, and "no such account" for a row that plainly
+    exists is how somebody concludes the console is broken.
+
+    A list rather than one row because the legacy data contains case-duplicate
+    accounts -- ten of them -- and the case-insensitive unique index only came
+    in with this backend. Hiding the second one would hide exactly the mess the
+    migration has to resolve.
+
+    Exact match, never a prefix. A console that answers partial addresses is a
+    directory of every user on the platform, walkable by anyone who reaches it.
+    """
+    email = email.strip().lower()
+    if not email:
+        return []
+
+    stmt = (
+        select(User).where(func.lower(User.email) == email).order_by(User.id)
+    )
+    return list(db.execute(stmt).scalars())
+
+
+def get_any_by_public_id(db: Session, public_id: str) -> User | None:
+    """Account with this public id, **active or not**, or None.
+
+    The admin counterpart to `get_by_public_id`, which hides inactive accounts
+    because it is the authentication path -- and an account somebody switched
+    off is exactly the one an admin is most likely to be looking for.
+
+    Still refuses an id of the wrong kind, so `ksk_...` here resolves to nobody
+    rather than to whichever user happens to share the number.
+    """
+    try:
+        parse_id(public_id, IdPrefix.USER)
+    except InvalidId:
+        return None
+
+    stmt = select(User).where(User.public_id == public_id)
+    return db.execute(stmt).scalar_one_or_none()

@@ -169,6 +169,16 @@ MATRIX: dict[tuple[str, str], set[str]] = {
         "DELETE",
         "/v1/admin/owners/{owner_id}/billing/discounts/{duration_months}",
     ): {ADMIN},
+    # Accounts and roles. An owner who could grant roles could make themselves
+    # an admin; one who could search accounts would hold a list of every
+    # student on the platform. The search takes an exact address and there is
+    # no route that lists everybody, so even an admin cannot walk it.
+    ("GET", "/v1/admin/accounts"): {ADMIN},
+    ("GET", "/v1/admin/accounts/{account_id}"): {ADMIN},
+    ("PUT", "/v1/admin/accounts/{account_id}/roles/{role}"): {ADMIN},
+    ("DELETE", "/v1/admin/accounts/{account_id}/roles/{role}"): {ADMIN},
+    ("POST", "/v1/admin/accounts/{account_id}/deactivate"): {ADMIN},
+    ("POST", "/v1/admin/accounts/{account_id}/activate"): {ADMIN},
     # ── device ──────────────────────────────────────────────────────────────
     # /register is PUBLIC by necessity: a machine being installed has no token
     # yet. The enrolment code it must present is single-use, short-lived, and

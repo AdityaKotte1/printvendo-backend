@@ -1,8 +1,11 @@
 import pytest
 
+from app.core.errors import Unauthorized
 from app.modules.identity import repository as repo
+from app.modules.identity.accounts import set_active
 from app.modules.identity.models import User, UserRole
 from app.modules.identity.roles import Role
+from app.modules.identity.sessions import issue_tokens, rotate_refresh
 
 
 @pytest.fixture
@@ -123,3 +126,29 @@ def test_actors_by_id_resolves_a_batch(db_session):
 
 def test_actors_by_id_asks_nothing_when_there_is_nobody_to_ask_about(db_session):
     assert repo.actors_by_id(db_session, set()) == {}
+
+
+def test_deactivating_kills_sessions_that_reactivating_does_not_bring_back(db_session):
+    """The property `revoke_all` is actually load-bearing for.
+
+    `rotate_refresh` already refuses an inactive user, so a refresh attempted
+    *while* the account is off fails either way -- a test of that would pass
+    without the revocation and prove nothing. What only holds with it is that a
+    refresh token taken before the account was switched off is still dead after
+    it is switched back on. Found by deliberately removing the revocation and
+    watching every test still pass.
+    """
+    secret = "s" * 32
+    user = User(email="leaver@example.com", hashed_password="x")
+    db_session.add(user)
+    db_session.flush()
+
+    _, refresh = issue_tokens(db_session, user, secret)
+    db_session.flush()
+
+    set_active(db_session, user, is_active=False)
+    set_active(db_session, user, is_active=True)
+    db_session.flush()
+
+    with pytest.raises(Unauthorized):
+        rotate_refresh(db_session, refresh, secret)

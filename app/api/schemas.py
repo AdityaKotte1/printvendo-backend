@@ -681,3 +681,25 @@ class QuoteResponse(BaseModel):
     discount_source: str
     negotiated: bool
     total: Decimal
+
+
+# ── admin: accounts and what they may do ────────────────────────────────────
+
+
+class AccountResponse(BaseModel):
+    """A person, as the console needs them.
+
+    No password hash, no token, no session -- there is no field any of them
+    could travel in. `roles` is the list from the role table rather than a set
+    of booleans on the row: three loose flags is how the old backend expressed
+    this, and it is why a refiller was one forgotten check away from money data.
+    """
+
+    id: str
+    email: str
+    full_name: str | None
+    roles: list[str]
+    is_active: bool
+    is_guest: bool
+    email_verified: bool
+    created_at: datetime
