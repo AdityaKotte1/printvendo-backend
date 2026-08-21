@@ -22,6 +22,7 @@ from app.modules.kiosks.models import (
     KioskPaper,
     PaperRefillLog,
 )
+from app.modules.ops import audit
 
 
 def _paper(db: Session, kiosk: Kiosk) -> KioskPaper:
@@ -59,7 +60,20 @@ def _log(
     used_before: int,
     actor_user_id: int | None,
     note: str | None,
+    action: str,
 ) -> None:
+    """The one place a paper change is written down, twice over.
+
+    `PaperRefillLog` is the operational record -- what a refiller sees as this
+    kiosk's history. The audit entry is the accountability record, in the same
+    table as every other change somebody made to a business they may not own.
+
+    Auditing here rather than in each route is deliberate: reset, set and
+    out-of-paper all pass through this function, and each is reachable from both
+    the owner and the refiller router. Wiring it per route would be six call
+    sites for one rule, which is how the old backend's audit ended up covering
+    16% of what it should have.
+    """
     db.add(
         PaperRefillLog(
             kiosk_id=kiosk.id,
@@ -69,6 +83,17 @@ def _log(
             used_before_change=used_before,
             note=note,
         )
+    )
+
+    audit.record(
+        db,
+        action=action,
+        entity_type="kiosk",
+        entity_id=kiosk.public_id,
+        actor_user_id=actor_user_id,
+        before={"used": used_before, "capacity": paper.capacity},
+        after={"used": paper.used, "capacity": paper.capacity},
+        note=note,
     )
 
 
@@ -88,6 +113,7 @@ def reset_paper(db: Session, kiosk: Kiosk, *, actor_user_id: int | None) -> int:
         used_before=used_before,
         actor_user_id=actor_user_id,
         note="reset to full",
+        action="kiosk.paper.reset",
     )
     db.add(paper)
     return paper.capacity
@@ -140,6 +166,7 @@ def set_paper(
         used_before=used_before,
         actor_user_id=actor_user_id,
         note=note,
+        action="kiosk.paper.set",
     )
     db.add(paper)
     return new_left
@@ -202,7 +229,11 @@ def consume_paper(
         sheets_added=-used,
         used_before=used_before,
         actor_user_id=None,
+        # Printing consumes paper; that is the machine, not a person. Recorded
+        # with no actor rather than omitted, so "the tray emptied and nobody
+        # touched it" is a statement the trail can actually make.
         note=note,
+        action="kiosk.paper.consumed",
     )
     db.add(paper)
     return max(0, paper.capacity - paper.used)

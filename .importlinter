@@ -106,6 +106,26 @@ source_modules =
 forbidden_modules =
     app.modules.orders
 
+[importlinter:contract:ops-records-about-things-it-does-not-know]
+name = ops depends on no other bounded context
+type = forbidden
+# Ops records that a kiosk went offline or that an owner's keys changed, and it
+# does so by public id and type -- strings. Importing the modules it records
+# about would make every context depend on ops the moment ops depended on them,
+# and "add an import to audit this" is how an audit helper ends up covering 16%
+# of the routes that should call it. The dependency runs one way: modules and
+# the api layer call ops; ops calls nobody.
+source_modules =
+    app.modules.ops
+forbidden_modules =
+    app.modules.identity
+    app.modules.kiosks
+    app.modules.payments
+    app.modules.billing
+    app.modules.printing
+    app.modules.orders
+    app.modules.wallet
+
 [importlinter:contract:wallet-is-self-contained]
 name = the wallet depends on no other bounded context
 type = forbidden
