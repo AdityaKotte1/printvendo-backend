@@ -36,8 +36,10 @@ from app.modules.kiosks.onboarding import (
 )
 from app.modules.kiosks.paper import consume_paper, sheets_remaining
 from app.modules.kiosks.pricing import (
+    UNBOUNDED as UnboundedBand,
+)
+from app.modules.kiosks.pricing import (
     BandSource,
-    PlatformBand,
     PriceBand,
     effective_prices,
     read_pricing,
@@ -59,9 +61,9 @@ __all__ = [
     "KioskPaper",
     "KioskType",
     "OnboardingStage",
-    "PlatformBand",
     "PlatformOnlyBilling",
     "PriceBand",
+    "UnboundedBand",
     "Scope",
     "authenticate_device",
     "consume_paper",

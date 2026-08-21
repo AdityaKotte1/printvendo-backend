@@ -19,6 +19,7 @@ from app.core.db import get_session_factory
 from app.core.errors import Forbidden, Unauthorized
 from app.core.notifier import LoggingNotifier, Notifier
 from app.core.security import TokenError, TokenType, decode_token
+from app.modules.billing import price_band_for
 from app.modules.identity import User
 from app.modules.identity import repository as repo
 from app.modules.identity.roles import Role
@@ -27,8 +28,9 @@ from app.modules.kiosks import (
     BillingCheck,
     Kiosk,
     KioskDevice,
-    PlatformBand,
+    PriceBand,
     Scope,
+    UnboundedBand,
     authenticate_device,
     consume_paper,
     kiosk_scope,
@@ -218,14 +220,44 @@ class KioskPaperLedger:
         )
 
 
-def get_band_source() -> BandSource:
-    """The price band an owner must stay within.
+class SubscriptionBand:
+    """The real `BandSource`: what this kiosk's owner's plan lets them charge.
 
-    Overridden by the billing module. Until then it is unbounded -- failing
-    open, unlike the billing check above, because a silly price is visible and
-    reversible while a misrouted payment is neither.
+    Replaces `PlatformBand`, which returned an unbounded band as a stand-in
+    until billing existed. Billing exists, so an owner can no longer set any
+    price at all.
+
+    The adapter lives here for the same reason `KioskPaperLedger` does. Kiosks
+    declares what it needs (`BandSource`); billing answers for a *user*, knowing
+    nothing about kiosks; and joining "who owns this kiosk" to "what is that
+    owner paying for" is the one thing the composition root is for.
+
+    A kiosk with no owner -- a PLATFORM install -- is unbounded, because its
+    prices are the platform's to set. That is the same direction billing fails
+    in, and it is safe for the same reason: a SOLD or SAAS kiosk cannot reach
+    LIVE without an active subscription, so the unbounded case is unreachable
+    for exactly the kiosks a band exists to constrain.
     """
-    return PlatformBand()
+
+    def band_for(self, db: Session, kiosk: Kiosk) -> PriceBand:
+        from app.modules.kiosks import repository as kiosk_repo
+
+        owner = kiosk_repo.owner_of(db, kiosk)
+        if owner is None:
+            return UnboundedBand
+
+        band = price_band_for(db, owner.id)
+        return PriceBand(
+            floor_bw=band.floor_bw,
+            ceiling_bw=band.ceiling_bw,
+            floor_color=band.floor_color,
+            ceiling_color=band.ceiling_color,
+        )
+
+
+def get_band_source() -> BandSource:
+    """The price band an owner must stay within."""
+    return SubscriptionBand()
 
 
 class OrderRefundSink:
