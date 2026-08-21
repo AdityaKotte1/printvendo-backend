@@ -23,6 +23,7 @@ from app.modules.payments.charges import (
     RazorpayGateway,
     confirm_payment,
     credentials_for,
+    credentials_for_payment,
     open_checkout,
     payment_for_razorpay_order,
     record_capture,
@@ -60,6 +61,7 @@ from app.modules.payments.models import (
     Refund,
     RefundDestination,
 )
+from app.modules.payments.razorpay import HttpRazorpay, RazorpayError
 from app.modules.payments.refunds import (
     RefundSink,
     refund,
@@ -82,6 +84,7 @@ __all__ = [
     "Collection",
     "Credentials",
     "GateBilling",
+    "HttpRazorpay",
     "Gateway",
     "KioskPaymentConfig",
     "Payment",
@@ -90,6 +93,7 @@ __all__ = [
     "PaymentKind",
     "PaymentSource",
     "PaymentStatus",
+    "RazorpayError",
     "RazorpayGateway",
     "Refund",
     "RefundDestination",
@@ -99,6 +103,7 @@ __all__ = [
     "can_take_payment",
     "confirm_payment",
     "credentials_for",
+    "credentials_for_payment",
     "decrypt_secret",
     "decrypt_webhook_secret",
     "get_config",

@@ -29,6 +29,7 @@ from app.modules.payments.refunds import refund
 from app.modules.wallet.models import EntryKind
 
 PLATFORM_SECRET = "platform_secret_value"
+SOME_KEYS = Credentials("rzp_test", PLATFORM_SECRET)
 
 
 class FakeRazorpay:
@@ -44,7 +45,9 @@ class FakeRazorpay:
     def create_order(self, *, amount_paise, receipt, credentials) -> str:
         return f"order_FAKE{next(self._orders)}"
 
-    def refund(self, *, razorpay_payment_id, amount_paise, idempotency_key) -> str:
+    def refund(
+        self, *, razorpay_payment_id, amount_paise, idempotency_key, credentials
+    ) -> str:
         existing = [r for r in self.refunds if r["idempotency_key"] == idempotency_key]
         assert not existing, "the gateway was asked twice for the same refund"
         self.refunds.append(
@@ -52,6 +55,7 @@ class FakeRazorpay:
                 "razorpay_payment_id": razorpay_payment_id,
                 "amount_paise": amount_paise,
                 "idempotency_key": idempotency_key,
+                "credentials": credentials,
             }
         )
         return f"rfd_FAKE{len(self.refunds)}"
@@ -128,6 +132,9 @@ def a_refund(
         actor_user_id=actor.id if actor is not None else None,
         reason=reason,
         razorpay=razorpay,
+        # A gateway call needs keys, and none of these tests are about which.
+        # `test_refund_credentials.py` is where that rule is pinned.
+        credentials=SOME_KEYS if razorpay is not None else None,
         sink=sink,
     )
 
@@ -588,7 +595,9 @@ def test_a_duplicate_refund_does_not_poison_the_transaction(
     from app.modules.payments.models import Refund
 
     class Gateway:
-        def refund(self, *, razorpay_payment_id, amount_paise, idempotency_key):
+        def refund(
+            self, *, razorpay_payment_id, amount_paise, idempotency_key, credentials
+        ):
             # The same gateway id twice: two of our rows claiming one real
             # refund, which the unique index refuses.
             return "rfnd_SAME"

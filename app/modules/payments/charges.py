@@ -74,7 +74,12 @@ class RazorpayGateway(Protocol):
         ...
 
     def refund(
-        self, *, razorpay_payment_id: str, amount_paise: int, idempotency_key: str
+        self,
+        *,
+        razorpay_payment_id: str,
+        amount_paise: int,
+        idempotency_key: str,
+        credentials: Credentials,
     ) -> str:
         """Return money to its source and return Razorpay's refund id.
 
@@ -83,6 +88,12 @@ class RazorpayGateway(Protocol):
         one. It is declared here rather than on a separate protocol because a
         gateway that can take money and cannot give it back is not one this
         module can use.
+
+        `credentials` are the collecting account's, from
+        `credentials_for_payment`. An account can only refund a payment it took,
+        so refunding an owner's payment with the platform's keys is a request
+        Razorpay refuses -- and the caller would have no way to tell that from
+        any other failure.
         """
         ...
 
@@ -233,6 +244,49 @@ def record_wallet_payment(
     db.add(payment)
     db.flush()
     return payment
+
+
+NO_KEYS_TO_REFUND_WITH = (
+    "That payment cannot be refunded automatically right now. "
+    "The shop's payment connection is not available."
+)
+NOT_A_GATEWAY_PAYMENT = "That payment did not go through a gateway."
+
+
+def credentials_for_payment(
+    db: Session,
+    payment: Payment,
+    *,
+    box: SecretBox,
+    platform_key_id: str,
+    platform_key_secret: str,
+) -> Credentials:
+    """The keys that can act on this payment at Razorpay.
+
+    Read off `collecting_user_id`, which is the gate's answer recorded at
+    checkout -- not re-derived from the kiosk, whose owner or keys may have
+    changed since. This is the same rule the refund destination follows, from
+    the same column, so the two can never disagree about whose money it was.
+
+    Fails rather than falling back to the platform's keys when an owner's are
+    gone. A fallback would turn "we cannot reach this owner's account" into a
+    Razorpay rejection nobody can interpret.
+    """
+    if payment.source is PaymentSource.WALLET:
+        # Never touched a gateway, so there is no account to act on. A to-source
+        # refund is already refused for exactly this reason.
+        raise Conflict(NOT_A_GATEWAY_PAYMENT)
+
+    if payment.collecting_user_id is None:
+        if not platform_key_id or not platform_key_secret:
+            raise Conflict(NO_KEYS_TO_REFUND_WITH)
+        return Credentials(platform_key_id, platform_key_secret)
+
+    config = get_config(db, payment.collecting_user_id)
+    if config is None or not config.razorpay_key_id:
+        raise Conflict(NO_KEYS_TO_REFUND_WITH)
+
+    return Credentials(config.razorpay_key_id, decrypt_secret(config, box))
 
 
 def payment_for_razorpay_order(db: Session, razorpay_order_id: str) -> Payment | None:

@@ -35,7 +35,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import BadRequest, Conflict
 from app.core.money import as_money, to_paise
-from app.modules.payments.charges import RazorpayGateway
+from app.modules.payments.charges import Credentials, RazorpayGateway
 from app.modules.payments.models import (
     Payment,
     PaymentStatus,
@@ -49,6 +49,10 @@ REFUND_EXCEEDS_CAPTURED = "That refund is more than what was paid."
 ILLEGAL_DESTINATION = "Refunds from an owner's account must go back to the source."
 NOTHING_TO_REVERSE = "That payment came from a balance, so it can only go back to one."
 NO_GATEWAY = "Refunding to the source needs a live Razorpay connection."
+NO_CREDENTIALS = (
+    "That refund cannot be sent right now. The collecting account's payment "
+    "connection is not available."
+)
 ALREADY_REFUNDED = "That refund has already been recorded."
 KEY_BELONGS_ELSEWHERE = "That refund reference has already been used for another payment."
 PAYMENT_NOT_CAPTURED = "Only a payment that was made can be refunded."
@@ -138,6 +142,7 @@ def refund(
     actor_user_id: int | None = None,
     reason: str | None = None,
     razorpay: RazorpayGateway | None = None,
+    credentials: Credentials | None = None,
     external_refund_id: str | None = None,
     sink: RefundSink | None = None,
 ) -> Refund:
@@ -148,6 +153,10 @@ def refund(
     money. Reusing it against a *different payment* is refused, because
     returning someone else's refund row would report success for a refund that
     never happened.
+
+    `credentials` are the collecting account's, from
+    `charges.credentials_for_payment`. Required for a to-source refund and
+    meaningless for a wallet credit, which never leaves our books.
 
     `external_refund_id` records a to-source refund that **already happened
     elsewhere** -- an owner refunding from their own Razorpay dashboard, which
@@ -184,10 +193,18 @@ def refund(
             # Fail closed. Writing the row without calling Razorpay would record
             # a refund the student never receives, and nothing would retry it.
             raise Conflict(NO_GATEWAY)
+        if credentials is None:
+            # Also closed, and for a sharper reason: an account can only refund
+            # a payment it took, so issuing this against whatever keys the
+            # gateway object happens to hold is how a refund goes to the wrong
+            # account. They come from `charges.credentials_for_payment`, which
+            # reads the account that actually collected.
+            raise Conflict(NO_CREDENTIALS)
         razorpay_refund_id = razorpay.refund(
             razorpay_payment_id=payment.razorpay_payment_id,
             amount_paise=to_paise(amount),
             idempotency_key=idempotency_key,
+            credentials=credentials,
         )
 
     refund_row = Refund(

@@ -25,13 +25,17 @@ dependencies = [
     # Multipart form parsing. FastAPI raises at import time without it, so a
     # missing dependency here breaks route collection rather than one endpoint.
     "python-multipart>=0.0.20",
+    # The Razorpay client is ours, not their SDK: the module talks to a
+    # protocol so the whole payment flow is testable without a network, and
+    # their SDK would drag in its own transport and error types for the sake of
+    # three HTTP calls.
+    "httpx>=0.28",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3",
     "pytest-cov>=6.0",
-    "httpx>=0.28",
     "import-linter>=2.1",
     "ruff>=0.8",
 ]

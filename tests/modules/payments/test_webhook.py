@@ -581,7 +581,9 @@ def test_a_refund_we_issued_ourselves_is_not_recorded_twice(
     from app.modules.payments.refunds import refunds_for
 
     class Gateway:
-        def refund(self, *, razorpay_payment_id, amount_paise, idempotency_key):
+        def refund(
+            self, *, razorpay_payment_id, amount_paise, idempotency_key, credentials
+        ):
             return "rfnd_OURS"
 
     refund(
@@ -591,6 +593,7 @@ def test_a_refund_we_issued_ourselves_is_not_recorded_twice(
         destination=RefundDestination.SOURCE,
         idempotency_key="ours",
         razorpay=Gateway(),
+        credentials=Credentials("rzp_test", "secret"),
     )
 
     body = refund_body(order_id=captured.razorpay_order_id, refund_id="rfnd_OURS")
