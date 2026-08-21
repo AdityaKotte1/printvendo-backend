@@ -345,3 +345,40 @@ class WalletEntryResponse(BaseModel):
 
 class TopUpRequest(BaseModel):
     amount_inr: Decimal
+
+
+# ── an owner's payment configuration ────────────────────────────────────────
+
+
+class PaymentConfigResponse(BaseModel):
+    """What is configured, masked.
+
+    There is no field for a key secret, and that is the mechanism rather than a
+    reminder: a response type with nowhere to put a secret cannot leak one, however
+    the handler is later edited.
+    """
+
+    is_configured: bool
+    key_id_masked: str | None
+    configured_at: datetime | None
+    # True when nothing is set yet, or an admin has approved a change that has
+    # not been used. One boolean so the form and the button cannot disagree.
+    can_update: bool
+
+
+class SetPaymentKeysRequest(BaseModel):
+    key_id: str
+    key_secret: str
+
+
+class SetWebhookSecretRequest(BaseModel):
+    # Razorpay's webhook signing secret, which they set per webhook rather than
+    # per key -- a different value from the API key secret above.
+    webhook_secret: str
+
+
+class WebhookEndpointResponse(BaseModel):
+    """The URL an owner registers in their own Razorpay dashboard."""
+
+    url: str
+    events: list[str]

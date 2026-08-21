@@ -1,6 +1,6 @@
 {
   "verified_at": "2026-08-21",
-  "tests": 1062,
+  "tests": 1080,
   "contracts": 11,
   "ruff": "clean",
   "done": [

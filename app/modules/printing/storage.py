@@ -36,6 +36,11 @@ class StorageArea(StrEnum):
 
     ORIGINAL = "originals"
     NORMALISED = "normalised"
+    # Evidence an owner uploaded to justify changing where their money goes.
+    # A separate area because retention must never touch it: the file is the
+    # basis on which an admin approved a change of bank details, and it has to
+    # outlive the seven days a student's PDF gets.
+    PROOF = "proofs"
 
 
 class InvalidStorageKey(ValueError):

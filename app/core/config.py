@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     def max_upload_bytes(self) -> int:
         return self.MAX_UPLOAD_MB * 1024 * 1024
 
+    # Where this API answers from, used to build the webhook URL an owner
+    # registers in their own Razorpay dashboard. Handed to them rather than
+    # assembled by hand: a typo there is silent -- deliveries hit a URL naming
+    # a different account, fail the signature check, and the owner's payments
+    # never settle with no error anyone sees.
+    PUBLIC_BASE_URL: str = "https://api.printvendo.com"
+
     CORS_ORIGINS: str = ""
 
     @property

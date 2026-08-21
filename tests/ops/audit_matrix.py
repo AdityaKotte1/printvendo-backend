@@ -58,6 +58,13 @@ AUDIT_MATRIX: dict[tuple[str, str], tuple[str, str]] = {
     ("POST", "/v1/app/orders/{order_id}/checkout"): (EXEMPT, RECORDED_ELSEWHERE),
     ("POST", "/v1/app/orders/{order_id}/verify"): (EXEMPT, RECORDED_ELSEWHERE),
     ("POST", "/v1/app/wallet/topup"): (EXEMPT, RECORDED_ELSEWHERE),
+    # ── owner: where their money goes ───────────────────────────────────────
+    # Changing the account that collects every student payment at every one of
+    # an owner's kiosks is the single most consequential thing a non-admin can
+    # do here, and the one an account takeover would go straight for.
+    ("PUT", "/v1/owner/payment-config/keys"): (AUDITED, ""),
+    ("PUT", "/v1/owner/payment-config/webhook-secret"): (AUDITED, ""),
+    ("POST", "/v1/owner/payment-config/change-request"): (AUDITED, ""),
     # ── owner: other people's money and other people's access ───────────────
     ("POST", "/v1/owner/kiosks/{kiosk_id}/status"): (AUDITED, ""),
     ("PUT", "/v1/owner/kiosks/{kiosk_id}/pricing"): (AUDITED, ""),

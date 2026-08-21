@@ -73,6 +73,17 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     # takings.
     ("POST", "/v1/webhooks/razorpay"): {PUBLIC},
     ("POST", "/v1/webhooks/razorpay/{owner_id}"): {PUBLIC},
+    # ── owner payment configuration ─────────────────────────────────────────
+    # OWNER only, and not ADMIN: these act on *the caller's own* Razorpay
+    # account, resolved from their token. An admin reaching them would be
+    # configuring their own payment keys, which is not a thing an admin does --
+    # reviewing somebody else's change request is an admin action and belongs
+    # to the admin surface, where the owner is named explicitly.
+    ("GET", "/v1/owner/payment-config"): {OWNER},
+    ("PUT", "/v1/owner/payment-config/keys"): {OWNER},
+    ("PUT", "/v1/owner/payment-config/webhook-secret"): {OWNER},
+    ("GET", "/v1/owner/payment-config/webhook-endpoint"): {OWNER},
+    ("POST", "/v1/owner/payment-config/change-request"): {OWNER},
     # ── owner ───────────────────────────────────────────────────────────────
     # ADMIN appears alongside OWNER throughout because admin is not a separate
     # router here -- it is the same routes with a wider kiosk scope.
