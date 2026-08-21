@@ -99,6 +99,12 @@ class PaymentConfigChangeRequest(Base):
     __tablename__ = "payment_config_change_requests"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    public_id: Mapped[str] = mapped_column(
+        String(24),
+        unique=True,
+        index=True,
+        default=lambda: new_id(IdPrefix.PAYMENT_CONFIG_CHANGE),
+    )
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )

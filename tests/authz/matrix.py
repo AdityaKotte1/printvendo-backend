@@ -120,6 +120,26 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     ("POST", "/v1/refiller/kiosks/{kiosk_id}/paper/reset"): {REFILLER, ADMIN},
     ("POST", "/v1/refiller/kiosks/{kiosk_id}/paper/out-of-paper"): {REFILLER, ADMIN},
     ("GET", "/v1/refiller/kiosks/{kiosk_id}/refill-logs"): {REFILLER, ADMIN},
+    # ── admin: reviewing where an owner's money goes ───────────────────────
+    # ADMIN alone, and this is the one place in the API where that exclusivity
+    # is the control itself. The set-once rule on payment keys is only worth
+    # something if the person approving a change is not the person asking for
+    # it -- an owner who could reach these routes would approve their own
+    # request, and an account takeover would walk straight through it to
+    # redirecting every rupee that owner's kiosks collect.
+    ("GET", "/v1/admin/payment-config/change-requests"): {ADMIN},
+    # The proof of account ownership, as bytes. Authenticated for the same
+    # reason it is not a static URL: it is evidence about somebody's bank
+    # account, and the old dashboard served these from a path anyone could
+    # guess, behind an onerror handler that hid its own failure.
+    ("GET", "/v1/admin/payment-config/change-requests/{request_id}/proof"): {ADMIN},
+    ("POST", "/v1/admin/payment-config/change-requests/{request_id}/review"): {ADMIN},
+    # The audit trail spans the whole estate: every shop's prices, staff
+    # changes and payment configuration. There is no scoped version of it, so
+    # there is no audience below ADMIN that could safely hold a narrower one.
+    ("GET", "/v1/admin/alerts"): {ADMIN},
+    ("POST", "/v1/admin/alerts/{alert_id}/resolve"): {ADMIN},
+    ("GET", "/v1/admin/audit"): {ADMIN},
     # ── device ──────────────────────────────────────────────────────────────
     # /register is PUBLIC by necessity: a machine being installed has no token
     # yet. The enrolment code it must present is single-use, short-lived, and

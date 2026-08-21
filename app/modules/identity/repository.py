@@ -62,3 +62,22 @@ def grant_role(db: Session, user_id: int, role: Role) -> None:
 
 def revoke_role(db: Session, user_id: int, role: Role) -> None:
     db.query(UserRole).filter(UserRole.user_id == user_id, UserRole.role == role).delete()
+
+
+def actors_by_id(db: Session, user_ids: set[int]) -> dict[int, User]:
+    """The people behind a page of internal ids, in one query.
+
+    For surfaces that hold rows naming a user by primary key -- the audit trail
+    above all -- and must turn them into something a person can read without
+    asking the database once per row.
+
+    Includes inactive accounts. An audit entry outlives whoever did the thing,
+    and "actor unknown" for a closed account would be a worse answer than the
+    address that closed it. An id with no row is simply absent from the result:
+    the caller has an entry to render either way.
+    """
+    if not user_ids:
+        return {}
+
+    rows = db.execute(select(User).where(User.id.in_(user_ids))).scalars()
+    return {user.id: user for user in rows}

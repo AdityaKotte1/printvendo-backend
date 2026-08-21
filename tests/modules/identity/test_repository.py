@@ -101,3 +101,25 @@ def test_email_exists_is_case_insensitive(db_session, user):
 
 def test_email_exists_is_false_for_an_unknown_address(db_session):
     assert repo.email_exists(db_session, "nobody@example.test") is False
+
+
+def test_actors_by_id_resolves_a_batch(db_session):
+    """An audit trail names its actors by internal id. Turning a page of those
+    into people must be one query, not one per row -- the N+1 that made the old
+    backend's admin listings slow enough that nobody opened them."""
+    first = User(email="one@example.com", hashed_password="x")
+    second = User(email="two@example.com", hashed_password="x")
+    db_session.add_all([first, second])
+    db_session.flush()
+
+    found = repo.actors_by_id(db_session, {first.id, second.id, 99999})
+
+    assert found[first.id].email == "one@example.com"
+    assert found[second.id].public_id == second.public_id
+    # An actor whose account has since been deleted is simply absent, not an
+    # error: an audit entry outlives the person it names, and must still read.
+    assert 99999 not in found
+
+
+def test_actors_by_id_asks_nothing_when_there_is_nobody_to_ask_about(db_session):
+    assert repo.actors_by_id(db_session, set()) == {}

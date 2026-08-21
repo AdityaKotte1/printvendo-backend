@@ -3,13 +3,17 @@ from cryptography.fernet import Fernet
 
 from app.core.crypto import SecretBox
 from app.core.errors import BadRequest, Conflict, NotFound
+from app.core.ids import IdPrefix, parse_id
 from app.modules.identity.models import User
 from app.modules.payments.configs import (
     decrypt_secret,
     get_config,
     has_usable_keys,
+    pending_change_requests,
+    proof_key,
     request_change,
     review_change,
+    review_change_by_id,
     set_keys,
     view_config,
 )
@@ -225,3 +229,98 @@ def test_has_usable_keys_is_true_once_configured(db_session, owner):
     set_keys(db_session, owner.id, key_id=KEY_ID, key_secret=SECRET, box=BOX)
     db_session.flush()
     assert has_usable_keys(db_session, owner.id) is True
+
+
+# ── what an admin reviews ───────────────────────────────────────────────────
+# The half of this loop that was missing: an owner could ask, and nothing could
+# answer. These are the reads and the one write an admin surface needs.
+
+
+def test_a_request_has_an_opaque_public_id(db_session, owner):
+    """Addressable by an admin route without exposing a primary key."""
+    req = request_change(db_session, owner.id, reason="r", proof_path=None)
+    db_session.flush()
+
+    assert parse_id(req.public_id, IdPrefix.PAYMENT_CONFIG_CHANGE)
+
+
+def test_pending_requests_are_listed_with_the_owner_named(db_session, owner):
+    """An admin reviewing a request needs to know whose money it is about.
+    The public id and the email come back on the view rather than being looked
+    up per row by the caller."""
+    request_change(db_session, owner.id, reason="moved banks", proof_path=None)
+    db_session.flush()
+
+    listed = pending_change_requests(db_session)
+
+    assert len(listed) == 1
+    assert listed[0].owner_public_id == owner.public_id
+    assert listed[0].owner_email == owner.email
+    assert listed[0].reason == "moved banks"
+
+
+def test_a_reviewed_request_leaves_the_pending_list(db_session, owner, admin):
+    req = request_change(db_session, owner.id, reason="r", proof_path=None)
+    db_session.flush()
+    review_change(db_session, req, approve=True, reviewer_user_id=admin.id)
+    db_session.flush()
+
+    assert pending_change_requests(db_session) == []
+
+
+def test_the_view_carries_no_storage_key(db_session, owner):
+    """`has_proof` rather than the key itself. A storage key in a JSON response
+    is an invitation to build a URL out of it, which is exactly the mistake the
+    proof route exists to prevent."""
+    request_change(db_session, owner.id, reason="r", proof_path="proofs/2026/08/x.png")
+    db_session.flush()
+
+    view = pending_change_requests(db_session)[0]
+
+    assert view.has_proof is True
+    assert not hasattr(view, "proof_path")
+    assert "proofs/2026/08/x.png" not in repr(view)
+
+
+def test_a_request_can_be_reviewed_by_public_id(db_session, owner, admin):
+    req = request_change(db_session, owner.id, reason="r", proof_path=None)
+    db_session.flush()
+
+    reviewed = review_change_by_id(
+        db_session, req.public_id, approve=True, reviewer_user_id=admin.id, note="ok"
+    )
+    db_session.flush()
+
+    assert reviewed.status is ChangeRequestStatus.APPROVED
+    assert reviewed.owner_public_id == owner.public_id
+    assert req.reviewed_by_user_id == admin.id
+
+
+def test_reviewing_a_request_that_does_not_exist_is_not_found(db_session, admin):
+    with pytest.raises(NotFound):
+        review_change_by_id(
+            db_session,
+            "pcr_0000000000000000",
+            approve=True,
+            reviewer_user_id=admin.id,
+        )
+
+
+def test_the_proof_key_is_readable_only_through_the_service(db_session, owner):
+    request_change(db_session, owner.id, reason="r", proof_path="proofs/2026/08/x.png")
+    db_session.flush()
+    public_id = pending_change_requests(db_session)[0].public_id
+
+    assert proof_key(db_session, public_id) == "proofs/2026/08/x.png"
+
+
+def test_a_request_with_no_proof_has_no_key_to_serve(db_session, owner):
+    """404 rather than an empty body: "there is no proof" and "here is the
+    proof, it is empty" must not look alike to an admin about to approve a
+    change of bank details."""
+    request_change(db_session, owner.id, reason="r", proof_path=None)
+    db_session.flush()
+    public_id = pending_change_requests(db_session)[0].public_id
+
+    with pytest.raises(NotFound):
+        proof_key(db_session, public_id)

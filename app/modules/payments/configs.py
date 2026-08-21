@@ -21,11 +21,15 @@ from sqlalchemy.orm import Session
 
 from app.core.crypto import SecretBox, mask_secret
 from app.core.errors import BadRequest, Conflict, NotFound
+from app.modules.identity import User
 from app.modules.payments.models import (
     ChangeRequestStatus,
     KioskPaymentConfig,
     PaymentConfigChangeRequest,
 )
+
+NO_SUCH_REQUEST = "That change request does not exist."
+NO_PROOF = "No proof of account ownership was uploaded with that request."
 
 ALREADY_CONFIGURED = (
     "Payment keys are already set for this account. Submit a change request to "
@@ -230,3 +234,111 @@ def review_change(
     request.review_note = note
     db.add(request)
     return request
+
+
+@dataclass(frozen=True)
+class ChangeRequestView:
+    """One request, as an admin reviewing it may see it.
+
+    Carries `has_proof` rather than the storage key. A key in a JSON response is
+    an invitation to build a URL out of it, and that is precisely the mistake
+    this loop exists to prevent -- the old admin dashboard concatenated
+    `API_BASE + '/storage/...'`, which 404s silently behind an `onerror`
+    handler, so proofs were approved unseen. The bytes come from an
+    authenticated route that takes `public_id`, and nothing else can address
+    the file.
+    """
+
+    public_id: str
+    owner_public_id: str
+    owner_email: str
+    reason: str | None
+    has_proof: bool
+    status: ChangeRequestStatus
+    created_at: datetime
+    reviewed_at: datetime | None
+    review_note: str | None
+
+
+def _view(request: PaymentConfigChangeRequest, owner: User) -> ChangeRequestView:
+    return ChangeRequestView(
+        public_id=request.public_id,
+        owner_public_id=owner.public_id,
+        owner_email=owner.email,
+        reason=request.reason,
+        has_proof=bool(request.proof_path),
+        status=ChangeRequestStatus(request.status),
+        created_at=request.created_at,
+        reviewed_at=request.reviewed_at,
+        review_note=request.review_note,
+    )
+
+
+def pending_change_requests(db: Session, *, limit: int = 100) -> list[ChangeRequestView]:
+    """The review queue, oldest first.
+
+    Oldest first on purpose, unlike every other listing here: this is a worklist
+    somebody works through, and an owner whose takings are misrouted is waiting
+    on it. Newest-first would bury the person who has waited longest.
+
+    The owner is joined in rather than looked up per row -- a review queue that
+    costs one query per pending request is the legacy audit's N+1 in a new
+    place.
+    """
+    rows = db.execute(
+        select(PaymentConfigChangeRequest, User)
+        .join(User, User.id == PaymentConfigChangeRequest.user_id)
+        .where(PaymentConfigChangeRequest.status == ChangeRequestStatus.PENDING)
+        .order_by(PaymentConfigChangeRequest.created_at, PaymentConfigChangeRequest.id)
+        .limit(limit)
+    ).all()
+    return [_view(request, owner) for request, owner in rows]
+
+
+def _by_public_id(db: Session, public_id: str) -> PaymentConfigChangeRequest:
+    request = db.execute(
+        select(PaymentConfigChangeRequest).where(
+            PaymentConfigChangeRequest.public_id == public_id
+        )
+    ).scalar_one_or_none()
+    if request is None:
+        raise NotFound(NO_SUCH_REQUEST)
+    return request
+
+
+def review_change_by_id(
+    db: Session,
+    public_id: str,
+    *,
+    approve: bool,
+    reviewer_user_id: int,
+    note: str | None = None,
+) -> ChangeRequestView:
+    """Approve or reject the request with this public id.
+
+    A thin wrapper over `review_change`, which keeps the rules -- so the api
+    layer never has to hold a row, and there is still exactly one place that
+    decides whether a request may be reviewed.
+    """
+    request = _by_public_id(db, public_id)
+    review_change(
+        db, request, approve=approve, reviewer_user_id=reviewer_user_id, note=note
+    )
+    db.flush()
+
+    owner = db.execute(select(User).where(User.id == request.user_id)).scalar_one()
+    return _view(request, owner)
+
+
+def proof_key(db: Session, public_id: str) -> str:
+    """The storage key of the file an owner uploaded to justify the change.
+
+    Reachable only from here, so the key cannot travel in a response body and
+    be turned into a URL. A request with no proof raises rather than returning
+    an empty key: "there is no proof" and "here is the proof, it is empty" must
+    not look alike to an admin about to approve a change of bank details.
+    """
+    request = _by_public_id(db, public_id)
+    if not request.proof_path:
+        raise NotFound(NO_PROOF)
+    return request.proof_path

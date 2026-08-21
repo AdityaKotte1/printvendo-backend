@@ -429,3 +429,79 @@ class OwnerOrderResponse(BaseModel):
     paid_at: datetime | None
     refunded_at: datetime | None
     created_at: datetime
+
+
+# ── admin: reviewing where an owner's money goes ────────────────────────────
+
+
+class ChangeRequestResponse(BaseModel):
+    """One owner asking to replace the account their takings are paid into.
+
+    `has_proof` rather than a path. There is deliberately no field a storage key
+    could travel in: the old admin dashboard turned one into
+    `API_BASE + '/storage/...'`, which 404s silently behind an `onerror`
+    handler, so admins approved these having never seen the evidence. The bytes
+    come from `/proof`, which authenticates.
+    """
+
+    id: str
+    owner_id: str
+    owner_email: str
+    reason: str | None
+    has_proof: bool
+    status: str
+    created_at: datetime
+    reviewed_at: datetime | None
+    review_note: str | None
+
+
+class ReviewChangeRequest(BaseModel):
+    approve: bool
+    # Why. Recorded on the request and in the audit trail, and shown to nobody
+    # automatically -- an owner told "rejected" with no reason will simply ask.
+    note: str | None = None
+
+
+# ── admin: what needs attention, and what was done ──────────────────────────
+
+
+class AlertResponse(BaseModel):
+    """One condition an operator should look at.
+
+    `occurrences` is what makes the list readable: a kiosk offline for a week is
+    one row seen 10,080 times, not 10,080 rows. The old backend's notifications
+    table had no such notion, and a console showing a wall of identical rows is
+    one nobody reads -- which looks like coverage and is not.
+    """
+
+    id: str
+    kind: str
+    severity: str
+    summary: str
+    detail: dict | None
+    entity_type: str | None
+    entity_id: str | None
+    occurrences: int
+    resolved: bool
+    first_seen_at: datetime
+    last_seen_at: datetime
+
+
+class AuditEntryResponse(BaseModel):
+    """One thing somebody did.
+
+    The actor is a person -- public id and email -- never `actor_user_id`. Null
+    for both when the system did it: "nobody did this" is a different fact from
+    "we failed to record who", and flattening them loses the distinction the
+    audit module went to the trouble of keeping.
+    """
+
+    action: str
+    entity_type: str
+    entity_id: str | None
+    actor_id: str | None
+    actor_email: str | None
+    before: dict | None
+    after: dict | None
+    note: str | None
+    created_at: datetime

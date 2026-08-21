@@ -84,6 +84,18 @@ AUDIT_MATRIX: dict[tuple[str, str], tuple[str, str]] = {
     ("DELETE", "/v1/owner/kiosks/{kiosk_id}/staff/{user_id}"): (AUDITED, ""),
     ("POST", "/v1/owner/kiosks/{kiosk_id}/device/enrol"): (AUDITED, ""),
     ("DELETE", "/v1/owner/kiosks/{kiosk_id}/device"): (AUDITED, ""),
+    # ── admin ─────────────────────────────────────────────────────────────────────
+    # Deciding that an owner may repoint their takings at a different bank
+    # account. Recorded against the owner rather than the request, so the whole
+    # story -- asked, decided, keys changed -- is one query on one entity id.
+    ("POST", "/v1/admin/payment-config/change-requests/{request_id}/review"): (
+        AUDITED,
+        "",
+    ),
+    # The alert row records who resolved it and when. An audit entry beside it
+    # would be a second, weaker copy of one fact, and the two would eventually
+    # disagree -- which is the shape of most of the legacy audit.
+    ("POST", "/v1/admin/alerts/{alert_id}/resolve"): (EXEMPT, RECORDED_ELSEWHERE),
     # ── device ──────────────────────────────────────────────────────────────
     # Registration exchanges an enrolment code for a lasting token. The owner
     # side of that (`/device/enrol`) is audited above, where there is an actor;

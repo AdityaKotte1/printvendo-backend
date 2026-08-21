@@ -28,6 +28,7 @@ class IdPrefix(StrEnum):
     WALLET_ENTRY = "wlt"
     SUBSCRIPTION = "sub"
     ALERT = "alr"
+    PAYMENT_CONFIG_CHANGE = "pcr"
 
 
 class InvalidId(ValueError):
