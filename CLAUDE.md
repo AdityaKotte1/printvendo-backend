@@ -164,9 +164,16 @@ Read this before continuing the build. It is the method, not a preference.
    spec was stale and had to be corrected.
 5. **Say what is not done.** Partial work is reported as partial.
 
+## Picking up a session
+
+`HANDOFF.md` has the exact commit work stopped at, what to start on, and the
+traps that cost time last session. Read it after this file. Update it at the end
+of a session and delete anything that has become true here instead — two
+documents describing the same thing is how they drift.
+
 ## State of play
 
-**934 tests passing, 10 import contracts kept, ruff clean.** Verify with:
+**1102 tests passing, 11 import contracts kept, ruff clean.** Verify with:
 
 ```bash
 .venv/Scripts/python -m pytest -q && .venv/Scripts/lint-imports && .venv/Scripts/python -m ruff check .
