@@ -42,6 +42,13 @@ def mutating_routes() -> list[tuple[str, str]]:
     for route in _flatten(app.routes):
         if route.path in IGNORED_PATHS:
             continue
+        # A WebSocket route has no `methods` and mutates nothing: the device
+        # socket carries a wake outward and the device then claims over the
+        # ordinary HTTP path, which is where any audit decision belongs. If one
+        # ever writes, it needs an entry -- and it will have to be given a
+        # method here to get one, which is the moment to think about it.
+        if not hasattr(route, "methods"):
+            continue
         for method in sorted(route.methods & MUTATING):
             found.append((method, route.path))
     return sorted(found)

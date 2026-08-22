@@ -1,10 +1,13 @@
 from datetime import timedelta
 
 import pytest
+from cryptography.fernet import Fernet
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.deps import CurrentUser, get_db, get_secret, require_role
+from app.core.bus import mark_for_wake
+from app.core.config import Settings
 from app.core.errors import install_error_handlers
 from app.core.ids import IdPrefix, new_id
 from app.core.security import TokenType, create_token
@@ -138,3 +141,62 @@ def test_errors_use_the_detail_envelope(app):
     body = _client(app).get("/whoami").json()
     assert set(body) == {"detail"}
     assert isinstance(body["detail"], str)
+
+
+# ── waking a kiosk after the transaction that gave it work ──────────────────
+
+
+def _db_settings(postgres_url: str) -> Settings:
+    return Settings(
+        ENV="dev",
+        DATABASE_URL=postgres_url,
+        REDIS_URL="redis://localhost:6379/0",
+        JWT_SECRET_KEY="x" * 32,
+        SECRETS_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+        CORS_ORIGINS="https://printvendo.com",
+        PUBLIC_BASE_URL="https://api.printvendo.com",
+    )
+
+
+def test_a_committed_request_wakes_the_kiosks_it_queued_work_for(
+    schema, postgres_url, monkeypatch
+):
+    """The wake fires from `get_db`, after the commit, so no route has to
+    remember to send one. Driven through the real dependency rather than a
+    stand-in, because the ordering -- commit first, publish second -- is the
+    whole point and only this generator expresses it."""
+    published: list[int] = []
+
+    class Recording:
+        def wake(self, kiosk_id: int) -> None:
+            published.append(kiosk_id)
+
+    monkeypatch.setattr("app.api.deps.redis_bus", lambda url: Recording())
+
+    generator = get_db(_db_settings(postgres_url))
+    session = next(generator)
+    mark_for_wake(session, 41)
+    with pytest.raises(StopIteration):
+        next(generator)
+
+    assert published == [41]
+
+
+def test_a_failed_request_wakes_nobody(schema, postgres_url, monkeypatch):
+    """The transaction rolled back, so there is no work to look at. A device
+    told otherwise would spend its one notification finding nothing."""
+    published: list[int] = []
+
+    class Recording:
+        def wake(self, kiosk_id: int) -> None:
+            published.append(kiosk_id)
+
+    monkeypatch.setattr("app.api.deps.redis_bus", lambda url: Recording())
+
+    generator = get_db(_db_settings(postgres_url))
+    session = next(generator)
+    mark_for_wake(session, 41)
+    with pytest.raises(RuntimeError):
+        generator.throw(RuntimeError("the handler failed"))
+
+    assert published == []

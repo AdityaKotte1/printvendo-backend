@@ -13,6 +13,10 @@ REFILLER = "refiller"
 ADMIN = "admin"
 DEVICE = "device"
 
+# A WebSocket route has no HTTP method. It still authenticates and still serves
+# data, so it is declared like everything else, under a pseudo-method.
+WEBSOCKET = "WS"
+
 KNOWN_AUDIENCES = {PUBLIC, STUDENT, OWNER, REFILLER, ADMIN, DEVICE}
 
 MATRIX: dict[tuple[str, str], set[str]] = {
@@ -194,4 +198,10 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     ("POST", "/v1/device/tasks/next"): {DEVICE},
     ("GET", "/v1/device/tasks/{task_id}/file"): {DEVICE},
     ("POST", "/v1/device/tasks/{task_id}/status"): {DEVICE},
+    # The socket. Declared like any other route, under a pseudo-method, because
+    # it authenticates and serves data and is therefore exactly as much an
+    # authorisation decision. It is checked *before* the handshake is accepted:
+    # a socket accepted first and checked afterwards is one an unauthenticated
+    # client can hold open, by the thousand, for nothing.
+    (WEBSOCKET, "/v1/device/ws"): {DEVICE},
 }

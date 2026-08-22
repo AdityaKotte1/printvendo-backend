@@ -13,6 +13,7 @@ from typing import Annotated
 from fastapi import Depends, Request
 from sqlalchemy.orm import Session
 
+from app.core.bus import Bus, flush_wakes, redis_bus
 from app.core.config import Settings
 from app.core.crypto import SecretBox
 from app.core.db import get_session_factory
@@ -74,6 +75,12 @@ def get_db(
     try:
         yield session
         session.commit()
+        # Only now: a device woken before the commit would ask for work, not see
+        # it, and have spent its one notification. Nothing here can fail the
+        # request -- it has already committed -- and a kiosk that misses a wake
+        # simply polls, which is what every device did before the socket
+        # existed.
+        flush_wakes(session, lambda: redis_bus(settings.REDIS_URL))
     except Exception:
         session.rollback()
         raise
@@ -363,3 +370,21 @@ def get_razorpay(
     security-critical part of a payment path the bit nobody tests.
     """
     return HttpRazorpay(timeout=settings.RAZORPAY_TIMEOUT_SECONDS)
+
+
+def get_bus(
+    settings: Annotated[Settings, Depends(get_settings_from_app)],
+) -> Bus:
+    """How a worker tells one kiosk's device that there is work.
+
+    Built per request rather than once at startup, and that is cheap: the
+    synchronous client pools connections, and the subscribing client is created
+    per socket because a pub/sub connection is stateful and must not be shared
+    between two devices.
+
+    A dependency so a test can hand over `fakeredis` and exercise the real
+    class. Redis is not installed locally, and the operator confirmed that is a
+    production concern rather than a local one -- the device API works by
+    polling without it.
+    """
+    return redis_bus(settings.REDIS_URL)

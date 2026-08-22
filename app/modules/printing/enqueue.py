@@ -16,6 +16,7 @@ the one that got missed would drift exactly as the old tray counter did.
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.bus import mark_for_wake
 from app.modules.printing.models import TERMINAL_TASK_STATES, PrintTask
 from app.modules.printing.options import PrintOptions, workload
 
@@ -49,6 +50,13 @@ def enqueue_task(
     )
     db.add(task)
     db.flush()
+
+    # Noted here rather than at whichever route caused it, so that a new caller
+    # cannot forget to tell the shop there is work. The wake is sent after this
+    # transaction commits -- see `core.bus.flush_wakes`, wired in `get_db` --
+    # because a device woken before the commit would ask, find nothing, and have
+    # spent the one notification it was going to get.
+    mark_for_wake(db, kiosk_id)
     return task
 
 

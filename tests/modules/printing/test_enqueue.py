@@ -7,6 +7,7 @@ same shape as the old backend, where three tables were written from everywhere.
 
 import pytest
 
+from app.core.bus import WAKE_KEY
 from app.modules.printing import PrintOptions
 from app.modules.printing.enqueue import committed_sheets, enqueue_task
 from app.modules.printing.models import PrintTask, TaskState
@@ -178,3 +179,27 @@ def test_another_kiosks_queue_is_not_counted(db_session, kiosk, document):
     _task(db_session, other, document, sheets=100)
 
     assert committed_sheets(db_session, kiosk_id=kiosk.id) == 0
+
+
+# ── telling the shop there is work ──────────────────────────────────────────
+
+
+def test_queueing_a_task_marks_its_kiosk_to_be_woken(db_session, kiosk, document):
+    """Noted where the work is created, not at whichever route caused it. A
+    route that queues a task cannot forget to wake the shop, because it does not
+    know it is doing it -- and "remember to call the helper" is what produced an
+    audit trail covering 15 of 94 mutating routes in the old backend.
+
+    The wake itself is sent after this transaction commits; see
+    `core.bus.flush_wakes`, wired into `get_db`.
+    """
+    enqueue_task(
+        db_session,
+        document_id=document.id,
+        kiosk_id=kiosk.id,
+        options=options(),
+        total_pages=10,
+        position=0,
+    )
+
+    assert db_session.info[WAKE_KEY] == {kiosk.id}

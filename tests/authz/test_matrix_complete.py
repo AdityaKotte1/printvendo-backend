@@ -9,11 +9,11 @@ mechanism the old backend lacked, and why /owner/* ended up carrying a
 
 import pytest
 from cryptography.fernet import Fernet
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, APIWebSocketRoute
 
 from app.core.config import Settings
 from app.main import create_app
-from tests.authz.matrix import KNOWN_AUDIENCES, MATRIX
+from tests.authz.matrix import KNOWN_AUDIENCES, MATRIX, WEBSOCKET
 
 IGNORED_PATHS = {"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}
 
@@ -27,7 +27,7 @@ SETTINGS = Settings(
 )
 
 
-def _flatten(routes) -> list[APIRoute]:
+def _flatten(routes) -> list[APIRoute | APIWebSocketRoute]:
     """Every APIRoute an app serves, however it was attached.
 
     This has to recurse. `include_router` does not splice the child's routes
@@ -37,9 +37,13 @@ def _flatten(routes) -> list[APIRoute]:
     which is how all real routes are attached. That made this whole harness
     pass while checking nothing.
     """
-    found: list[APIRoute] = []
+    found: list[APIRoute | APIWebSocketRoute] = []
     for route in routes:
-        if isinstance(route, APIRoute):
+        # WebSocket routes are a different class with no `methods` at all, so a
+        # collector that filtered for APIRoute alone would let one through
+        # undeclared -- the precise hole this harness exists to close, in a
+        # shape it had not met yet. They are reported with the pseudo-method WS.
+        if isinstance(route, APIRoute | APIWebSocketRoute):
             found.append(route)
             continue
 
@@ -56,6 +60,9 @@ def declared_routes() -> list[tuple[str, str]]:
     found = []
     for route in _flatten(app.routes):
         if route.path in IGNORED_PATHS:
+            continue
+        if isinstance(route, APIWebSocketRoute):
+            found.append((WEBSOCKET, route.path))
             continue
         for method in sorted(route.methods - {"HEAD", "OPTIONS"}):
             found.append((method, route.path))
@@ -78,6 +85,14 @@ def test_the_harness_sees_routes_attached_via_include_router():
     routes = declared_routes()
     assert ("GET", "/v1/app/auth/me") in routes, routes
     assert ("GET", "/health") in routes, routes
+
+
+def test_the_harness_sees_websocket_routes():
+    """A WebSocket route carries no `methods`, so the obvious collector skips it
+    in silence. It authenticates and it serves data, which makes it exactly as
+    much an authorisation decision as any other route."""
+    routes = declared_routes()
+    assert any(method == WEBSOCKET for method, _ in routes), routes
 
 
 def test_every_route_has_a_matrix_entry():
