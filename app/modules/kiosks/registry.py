@@ -10,6 +10,7 @@ Razorpay account collects from students. See change_type.
 
 from decimal import Decimal
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.errors import BadRequest, Conflict
@@ -21,6 +22,19 @@ from app.modules.kiosks.models import Kiosk, KioskPaper
 OWNER_GATEWAY_TYPES = frozenset({KioskType.SOLD, KioskType.SAAS})
 
 
+def by_legacy_id(db: Session, legacy_id: int) -> Kiosk | None:
+    """The kiosk that replaced this one in the backend being replaced, if any.
+
+    None is a real answer for a kiosk created in the admin console after
+    cutover -- it replaces nothing. It is also what makes an unmapped legacy
+    kiosk detectable, which the migration turns into a failed run rather than a
+    quietly smaller revenue total.
+    """
+    return db.execute(
+        select(Kiosk).where(Kiosk.legacy_id == legacy_id)
+    ).scalar_one_or_none()
+
+
 def create_kiosk(
     db: Session,
     *,
@@ -30,8 +44,20 @@ def create_kiosk(
     latitude: float | None = None,
     longitude: float | None = None,
     paper_capacity: int | None = None,
+    legacy_id: int | None = None,
 ) -> Kiosk:
-    """Register a kiosk. It starts REGISTERED and is not yet listed to students."""
+    """Register a kiosk. It starts REGISTERED and is not yet listed to students.
+
+    `legacy_id` names the kiosk in the backend being replaced, and is set only by
+    the migration. Kiosks are **created through here** rather than copied row for
+    row, so every rule above applies to them too; what the migration needs back
+    is the link, because legacy orders and payments carry the old kiosk id and
+    without a mapping their history would land nowhere.
+
+    One old kiosk becomes one new kiosk, enforced. Two claiming the same origin
+    would split that shop's history in a way no reconciliation could tell apart
+    from rows that were simply lost.
+    """
     name = name.strip()
     if not name:
         raise BadRequest("A kiosk needs a name.")
@@ -39,12 +65,16 @@ def create_kiosk(
     if db.query(Kiosk).filter(Kiosk.name == name).first() is not None:
         raise Conflict(f"A kiosk called {name!r} already exists.")
 
+    if legacy_id is not None and by_legacy_id(db, legacy_id) is not None:
+        raise Conflict(f"Legacy kiosk {legacy_id} has already been imported.")
+
     kiosk = Kiosk(
         name=name,
         kiosk_type=kiosk_type,
         location_description=location_description,
         latitude=latitude,
         longitude=longitude,
+        legacy_id=legacy_id,
     )
     db.add(kiosk)
     db.flush()

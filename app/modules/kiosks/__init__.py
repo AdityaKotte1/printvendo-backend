@@ -46,6 +46,7 @@ from app.modules.kiosks.pricing import (
     set_pricing,
 )
 from app.modules.kiosks.registry import (
+    by_legacy_id,
     change_type,
     create_kiosk,
     rename_kiosk,
@@ -97,6 +98,7 @@ __all__ = [
     "rotate_token",
     "set_pricing",
     "accept_invite",
+    "by_legacy_id",
     "change_type",
     "create_kiosk",
     "invite_staff",

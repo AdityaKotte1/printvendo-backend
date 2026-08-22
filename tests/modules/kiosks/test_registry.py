@@ -6,6 +6,7 @@ from app.core.errors import BadRequest, Conflict
 from app.modules.kiosks.enums import KioskType, OnboardingStage
 from app.modules.kiosks.models import KioskPaper
 from app.modules.kiosks.registry import (
+    by_legacy_id,
     change_type,
     create_kiosk,
     rename_kiosk,
@@ -191,3 +192,41 @@ def test_setting_one_price_leaves_the_others_alone(db_session):
 
     assert kiosk.price_bw_single == Decimal("3")
     assert kiosk.price_color_single == Decimal("8")
+
+
+# ── knowing which old kiosk this is ─────────────────────────────────────────
+# The migration creates kiosks through this function rather than copying rows,
+# so every invariant here applies to them. What it needs back is the link:
+# legacy orders and payments carry the old kiosk id, and without a mapping
+# their history lands nowhere.
+
+
+def test_a_kiosk_can_record_which_legacy_kiosk_it_replaces(db_session):
+    kiosk = create_kiosk(db_session, name="Vignan Xerox", legacy_id=35)
+    db_session.flush()
+
+    assert kiosk.legacy_id == 35
+    assert by_legacy_id(db_session, 35).id == kiosk.id
+
+
+def test_a_kiosk_created_without_a_legacy_id_has_none(db_session):
+    """Kiosks made in the admin console after cutover replace nothing. None is
+    the true answer, and it is what makes an unmapped legacy kiosk detectable."""
+    kiosk = create_kiosk(db_session, name="Opened Last Week")
+    db_session.flush()
+
+    assert kiosk.legacy_id is None
+
+
+def test_two_kiosks_cannot_claim_the_same_legacy_kiosk(db_session):
+    """One old kiosk becomes one new kiosk. Two would split its history in a way
+    no reconciliation could later tell apart from lost rows."""
+    create_kiosk(db_session, name="First", legacy_id=35)
+    db_session.flush()
+
+    with pytest.raises(Conflict):
+        create_kiosk(db_session, name="Second", legacy_id=35)
+
+
+def test_an_unmapped_legacy_kiosk_is_not_found(db_session):
+    assert by_legacy_id(db_session, 999) is None
