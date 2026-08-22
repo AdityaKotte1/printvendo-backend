@@ -140,6 +140,10 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     ("GET", "/v1/admin/alerts"): {ADMIN},
     ("POST", "/v1/admin/alerts/{alert_id}/resolve"): {ADMIN},
     ("GET", "/v1/admin/audit"): {ADMIN},
+    # Platform takings across the whole estate. An owner reading this would see
+    # every other shop's turnover rolled up, which is somebody else's
+    # commercial information.
+    ("GET", "/v1/admin/revenue"): {ADMIN},
     # A kiosk's life. Creating one decides what it is, and therefore whose
     # Razorpay collects at it; changing its type decides that again. An owner
     # who could reach either would point a platform kiosk's takings at

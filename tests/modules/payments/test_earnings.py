@@ -17,7 +17,11 @@ from app.modules.kiosks.enums import KioskType, OnboardingStage
 from app.modules.kiosks.models import Kiosk
 from app.modules.payments import PaymentKind, record_wallet_payment
 from app.modules.payments.charges import Credentials, open_checkout, record_capture
-from app.modules.payments.earnings import earnings_by_kiosk, earnings_for_kiosks
+from app.modules.payments.earnings import (
+    earnings_by_kiosk,
+    earnings_for_kiosks,
+    platform_revenue,
+)
 from app.modules.payments.gate import Gateway
 from app.modules.payments.models import PaymentStatus, RefundDestination
 from app.modules.payments.refunds import refund
@@ -271,3 +275,104 @@ def test_the_split_agrees_with_the_total(db_session, gateway, student, kiosk):
 
     assert sum(e.gross_inr for e in split.values()) == total.gross_inr
     assert sum(e.order_count for e in split.values()) == total.order_count
+
+
+# ── what the platform itself took ───────────────────────────────────────────
+# Four buckets rather than one number, because they are four different kinds of
+# money and adding them up would produce a figure that is true of nothing.
+
+
+def test_platform_revenue_separates_our_money_from_the_owners(
+    db_session, gateway, student, kiosk
+):
+    """A payment collected into an owner's own Razorpay never touched us. It is
+    worth reporting -- it is what the platform's kiosks turn over -- but adding
+    it to our takings would claim money we have never held."""
+    a_capture(db_session, gateway, student, kiosk, "100.00")
+    owner = User(email="shop@example.com", hashed_password="x")
+    db_session.add(owner)
+    db_session.flush()
+    owner_payment = a_capture(db_session, gateway, student, kiosk, "250.00")
+    owner_payment.collecting_user_id = owner.id
+    db_session.flush()
+
+    revenue = platform_revenue(db_session)
+
+    assert revenue.print_platform.gross_inr == Decimal("100.00")
+    assert revenue.print_owners.gross_inr == Decimal("250.00")
+
+
+def test_a_wallet_top_up_is_float_not_revenue(db_session, student, kiosk):
+    """Money we hold on somebody's behalf. Counting it as takings would book a
+    liability as income, and the number would grow every time a student topped
+    up and never spent it."""
+    record_wallet_payment(
+        db_session,
+        user_id=student.id,
+        kind=PaymentKind.WALLET_TOPUP,
+        amount=Decimal("500.00"),
+    )
+
+    revenue = platform_revenue(db_session)
+
+    assert revenue.wallet_topups.gross_inr == Decimal("500.00")
+    assert revenue.print_platform.gross_inr == Decimal("0.00")
+
+
+def test_balance_spent_at_a_kiosk_is_money_the_platform_collected(
+    db_session, student, kiosk
+):
+    """A wallet payment has no collecting owner -- the platform already held the
+    balance -- so it lands in our bucket. Some of it may be owed onward to a
+    shop, which is a question about kiosk ownership and is deliberately not
+    answered here: payments does not know who owns a kiosk."""
+    record_wallet_payment(
+        db_session,
+        user_id=student.id,
+        kind=PaymentKind.PRINT_ORDER,
+        amount=Decimal("40.00"),
+        kiosk_id=kiosk.id,
+    )
+
+    revenue = platform_revenue(db_session)
+
+    assert revenue.print_platform.gross_inr == Decimal("40.00")
+
+
+def test_platform_revenue_respects_the_window(db_session, gateway, student, kiosk):
+    a_capture(db_session, gateway, student, kiosk, "100.00", at=NOW - timedelta(days=10))
+    a_capture(db_session, gateway, student, kiosk, "70.00", at=NOW)
+
+    recent = platform_revenue(db_session, since=NOW - timedelta(days=1))
+
+    assert recent.print_platform.gross_inr == Decimal("70.00")
+    assert recent.print_platform.order_count == 1
+
+
+def test_refunds_show_beside_takings_rather_than_erasing_them(
+    db_session, gateway, student, kiosk
+):
+    payment = a_capture(db_session, gateway, student, kiosk, "100.00")
+    refund(
+        db_session,
+        payment=payment,
+        amount=Decimal("100.00"),
+        destination=RefundDestination.SOURCE,
+        idempotency_key="platform-full",
+        razorpay=gateway,
+        credentials=Credentials("rzp_test", "secret"),
+    )
+    db_session.flush()
+
+    revenue = platform_revenue(db_session)
+
+    assert revenue.print_platform.gross_inr == Decimal("100.00")
+    assert revenue.print_platform.refunded_inr == Decimal("100.00")
+    assert revenue.print_platform.net_inr == Decimal("0.00")
+
+
+def test_nothing_at_all_reads_as_zero_rather_than_missing(db_session):
+    revenue = platform_revenue(db_session)
+
+    assert revenue.print_platform.gross_inr == Decimal("0.00")
+    assert revenue.subscriptions.order_count == 0

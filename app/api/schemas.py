@@ -703,3 +703,31 @@ class AccountResponse(BaseModel):
     is_guest: bool
     email_verified: bool
     created_at: datetime
+
+
+# ── admin: what the platform took ───────────────────────────────────────────
+
+
+class RevenueBucketResponse(BaseModel):
+    gross_inr: Decimal
+    refunded_inr: Decimal
+    # May be negative: refunds today against takings from last week. Reported as
+    # it is, because that is the one case somebody has to act on.
+    net_inr: Decimal
+    payment_count: int
+
+
+class PlatformRevenueResponse(BaseModel):
+    """Four buckets and no total.
+
+    There is deliberately no `total` field. The buckets are four different kinds
+    of money -- ours, the owners', subscription income, and balances we hold on
+    students' behalf -- and a figure summing them would be true of nothing.
+    """
+
+    since: datetime | None
+    until: datetime | None
+    print_platform: RevenueBucketResponse
+    print_owners: RevenueBucketResponse
+    subscriptions: RevenueBucketResponse
+    wallet_topups: RevenueBucketResponse

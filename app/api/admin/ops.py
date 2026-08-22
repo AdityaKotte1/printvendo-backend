@@ -11,17 +11,24 @@ is what made the old backend's admin listings slow enough that nobody opened
 them, which has the same end state as not having built them.
 """
 
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_role
-from app.api.schemas import AlertResponse, AuditEntryResponse
+from app.api.schemas import (
+    AlertResponse,
+    AuditEntryResponse,
+    PlatformRevenueResponse,
+    RevenueBucketResponse,
+)
 from app.modules.identity import User
 from app.modules.identity import repository as identity_repo
 from app.modules.identity.roles import Role
 from app.modules.ops import AlertSeverity, entries_for, open_alerts, resolve
+from app.modules.payments import Earnings, platform_revenue
 
 router = APIRouter(prefix="/v1/admin", tags=["admin"])
 
@@ -131,3 +138,45 @@ def audit_trail(
         )
         for entry in entries
     ]
+
+
+# ── what the platform took ──────────────────────────────────────────────────
+
+
+def _bucket(earnings: Earnings) -> RevenueBucketResponse:
+    return RevenueBucketResponse(
+        gross_inr=earnings.gross_inr,
+        refunded_inr=earnings.refunded_inr,
+        net_inr=earnings.net_inr,
+        payment_count=earnings.order_count,
+    )
+
+
+@router.get("/revenue", response_model=PlatformRevenueResponse)
+def revenue(
+    admin: CurrentAdmin,
+    db: Annotated[Session, Depends(get_db)],
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> PlatformRevenueResponse:
+    """Money in, over a window, in buckets that are not addable.
+
+    `since` and `until` are typed as datetimes rather than parsed here, so a
+    request for "lastweek" is a 422 instead of a silently unfiltered answer --
+    an operator who asked for this month and got all time would read it as a
+    very good month.
+
+    The same settled-payment predicate as an owner's own earnings page. One
+    definition, so a platform figure and a shop's figure cannot disagree the way
+    the old backend's three copies did.
+    """
+    figures = platform_revenue(db, since=since, until=until)
+
+    return PlatformRevenueResponse(
+        since=since,
+        until=until,
+        print_platform=_bucket(figures.print_platform),
+        print_owners=_bucket(figures.print_owners),
+        subscriptions=_bucket(figures.subscriptions),
+        wallet_topups=_bucket(figures.wallet_topups),
+    )

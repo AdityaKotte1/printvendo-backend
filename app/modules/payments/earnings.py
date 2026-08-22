@@ -150,3 +150,84 @@ def earnings_by_kiosk(
     # missing key reads as "no data" and gets rendered as a blank; zero is the
     # true and more useful answer.
     return {kiosk_id: found.get(kiosk_id, Earnings.of(ZERO, ZERO, 0)) for kiosk_id in kiosk_ids}
+
+
+@dataclass(frozen=True)
+class PlatformRevenue:
+    """What the platform itself took, in four buckets that are not addable.
+
+    Deliberately not one number. They are four different kinds of money, and a
+    total across them would be true of nothing:
+
+    * `print_platform` -- print money that landed with us, whether through the
+      platform's own Razorpay or out of a student's balance.
+    * `print_owners` -- print money collected straight into an owner's account.
+      It never touched us. Worth reporting, because it is what the estate turns
+      over; adding it to our takings would claim money we have never held.
+    * `subscriptions` -- what owners pay us for the software. Ours outright.
+    * `wallet_topups` -- money we hold on somebody else's behalf. A liability,
+      not income: counting it as takings would book a balance nobody has spent
+      yet as revenue, and the figure would grow with every top-up.
+
+    What is **not** here: how much of `print_platform` is owed onward to shop
+    owners whose students paid from a balance. That is a question about who owns
+    a kiosk, and payments does not know -- the answer belongs to something above
+    both contexts. An approximation computed here would be a second, wrong
+    opinion about settlement.
+    """
+
+    print_platform: Earnings
+    print_owners: Earnings
+    subscriptions: Earnings
+    wallet_topups: Earnings
+
+
+def platform_revenue(
+    db: Session,
+    *,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> PlatformRevenue:
+    """The four buckets over a window, in one query.
+
+    Grouped in SQL by the two columns that distinguish them -- `kind`, and
+    whether an owner collected -- rather than by running four aggregates. The
+    same `SETTLED_PAYMENT_STATES` predicate as every other revenue figure in the
+    system, so a platform total and an owner's own page can never disagree about
+    which payments count.
+    """
+    collected_by_owner = Payment.collecting_user_id.is_not(None)
+
+    stmt = _settled(
+        select(
+            Payment.kind,
+            collected_by_owner.label("owner_collected"),
+            func.coalesce(func.sum(Payment.amount_inr), 0),
+            func.coalesce(func.sum(Payment.refunded_inr), 0),
+            func.count(Payment.id),
+        )
+    ).group_by(Payment.kind, collected_by_owner)
+
+    if since is not None:
+        stmt = stmt.where(Payment.captured_at >= since)
+    if until is not None:
+        stmt = stmt.where(Payment.captured_at < until)
+
+    buckets: dict[tuple[PaymentKind, bool], Earnings] = {
+        (PaymentKind(kind), bool(owner_collected)): Earnings.of(gross, refunded, count)
+        for kind, owner_collected, gross, refunded, count in db.execute(stmt).all()
+    }
+
+    def bucket(kind: PaymentKind, *, owner_collected: bool = False) -> Earnings:
+        return buckets.get((kind, owner_collected), Earnings.of(ZERO, ZERO, 0))
+
+    return PlatformRevenue(
+        print_platform=bucket(PaymentKind.PRINT_ORDER),
+        print_owners=bucket(PaymentKind.PRINT_ORDER, owner_collected=True),
+        # A subscription is always collected by the platform: an owner does not
+        # pay themselves for the software. Reading the platform bucket rather
+        # than summing both is what would make a misrouted one visible as a
+        # missing figure instead of being quietly folded in.
+        subscriptions=bucket(PaymentKind.SUBSCRIPTION),
+        wallet_topups=bucket(PaymentKind.WALLET_TOPUP),
+    )

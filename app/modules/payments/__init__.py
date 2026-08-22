@@ -49,8 +49,10 @@ from app.modules.payments.configs import (
 )
 from app.modules.payments.earnings import (
     Earnings,
+    PlatformRevenue,
     earnings_by_kiosk,
     earnings_for_kiosks,
+    platform_revenue,
 )
 from app.modules.payments.gate import (
     GateBilling,
@@ -101,6 +103,7 @@ __all__ = [
     "Gateway",
     "KioskPaymentConfig",
     "Payment",
+    "PlatformRevenue",
     "PaymentConfigChangeRequest",
     "PaymentConfigView",
     "PaymentKind",
@@ -127,6 +130,7 @@ __all__ = [
     "kiosk_payment_gate",
     "open_checkout",
     "payment_for_razorpay_order",
+    "platform_revenue",
     "pending_change_requests",
     "proof_key",
     "record_capture",
