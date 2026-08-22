@@ -46,6 +46,9 @@ class OrderLineView:
 class OrderView:
     id: str
     kiosk_id: str
+    # The shop's name, because a receipt that says `ksk_7f2...` is a receipt
+    # nobody can file. Read in the same batched query as the id.
+    kiosk_name: str
     state: OrderState
     payment_method: str | None
     subtotal_inr: Decimal
@@ -69,11 +72,14 @@ def _public_ids(db: Session, orders: list[Order]) -> tuple[dict, dict]:
     }
 
     kiosks = (
-        dict(
-            db.execute(
-                select(Kiosk.id, Kiosk.public_id).where(Kiosk.id.in_(kiosk_ids))
+        {
+            row[0]: (row[1], row[2])
+            for row in db.execute(
+                select(Kiosk.id, Kiosk.public_id, Kiosk.name).where(
+                    Kiosk.id.in_(kiosk_ids)
+                )
             ).all()
-        )
+        }
         if kiosk_ids
         else {}
     )
@@ -95,7 +101,8 @@ def _public_ids(db: Session, orders: list[Order]) -> tuple[dict, dict]:
 def _view(order: Order, kiosks: dict, documents: dict) -> OrderView:
     return OrderView(
         id=order.public_id,
-        kiosk_id=kiosks.get(order.kiosk_id, ""),
+        kiosk_id=kiosks.get(order.kiosk_id, ("", ""))[0],
+        kiosk_name=kiosks.get(order.kiosk_id, ("", ""))[1],
         state=order.state,
         payment_method=(
             order.payment_method.value if order.payment_method is not None else None

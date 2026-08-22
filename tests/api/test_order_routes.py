@@ -449,3 +449,61 @@ def test_the_statement_shows_what_happened(client, auth, db_session, student):
     assert entries[0]["kind"] == "topup"
     assert entries[0]["amount_inr"] == "50.00"
     assert entries[0]["balance_after_inr"] == "50.00"
+
+
+# ── the receipt ─────────────────────────────────────────────────────────────
+
+
+def _paid_order(client, auth, db_session, student, kiosk, document) -> str:
+    credit(
+        db_session,
+        user_id=student.id,
+        amount=Decimal("100.00"),
+        kind=EntryKind.TOPUP,
+        reference=f"receipt_seed_{document.public_id}",
+    )
+    order = place(client, auth, kiosk, document).json()
+    paid = client.post(f"/v1/app/orders/{order['id']}/pay/wallet", headers=auth)
+    assert paid.status_code == 200, paid.text
+    return order["id"]
+
+
+def test_a_paid_order_has_a_receipt(client, auth, db_session, student, kiosk, document):
+    order = _paid_order(client, auth, db_session, student, kiosk, document)
+
+    response = client.get(f"/v1/app/orders/{order}/invoice", headers=auth)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/pdf")
+    assert response.content[:5] == b"%PDF-"
+    assert order in response.headers["content-disposition"]
+
+
+def test_an_unpaid_order_has_no_receipt(client, auth, kiosk, document):
+    """It is a quote. A PDF headed "Total paid" against money nobody has taken
+    is a thing to wave at a shop counter."""
+    placed = place(client, auth, kiosk, document).json()
+
+    response = client.get(f"/v1/app/orders/{placed['id']}/invoice", headers=auth)
+
+    assert response.status_code == 409
+    assert "not been paid" in response.json()["detail"]
+
+
+def test_somebody_elses_receipt_is_a_404(
+    client, db_session, student, kiosk, document, auth
+):
+    """The same answer as an order that never existed."""
+    order = _paid_order(client, auth, db_session, student, kiosk, document)
+
+    nosy = User(email="nosy@example.com", hashed_password="x")
+    db_session.add(nosy)
+    db_session.flush()
+    token = create_token(nosy.public_id, TokenType.ACCESS, SECRET, timedelta(minutes=5))
+
+    response = client.get(
+        f"/v1/app/orders/{order}/invoice",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 404

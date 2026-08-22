@@ -25,6 +25,9 @@ dependencies = [
     "pikepdf>=9.4",
     # Photo printing: images composed onto an A4 canvas server-side.
     "pillow>=11.0",
+    # Receipts. Vector text rather than a rendered image, so a receipt printed
+    # at a counter is sharp and can be searched in a PDF viewer.
+    "reportlab>=4.0",
     # Multipart form parsing. FastAPI raises at import time without it, so a
     # missing dependency here breaks route collection rather than one endpoint.
     "python-multipart>=0.0.20",
@@ -44,6 +47,10 @@ dev = [
     "fakeredis>=2.26",
     "pytest-cov>=6.0",
     "import-linter>=2.1",
+    # Reads a generated receipt back as text. Searching the raw bytes finds
+    # nothing -- the content streams are compressed -- so a test written that
+    # way passes only when the PDF is malformed.
+    "pypdf>=5.1",
     "ruff>=0.8",
 ]
 

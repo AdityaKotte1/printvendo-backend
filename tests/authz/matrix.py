@@ -62,6 +62,10 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     ("POST", "/v1/app/orders"): {STUDENT, OWNER, REFILLER, ADMIN},
     ("GET", "/v1/app/orders"): {STUDENT, OWNER, REFILLER, ADMIN},
     ("GET", "/v1/app/orders/{order_id}"): {STUDENT, OWNER, REFILLER, ADMIN},
+    # A receipt for your own order. Scoped by `_order_or_404`, so somebody
+    # else's is a 404 -- including for an admin, who has no business reading a
+    # student's receipt through the student surface.
+    ("GET", "/v1/app/orders/{order_id}/invoice"): {STUDENT, OWNER, REFILLER, ADMIN},
     ("POST", "/v1/app/orders/{order_id}/pay/wallet"): {STUDENT, OWNER, REFILLER, ADMIN},
     ("POST", "/v1/app/orders/{order_id}/checkout"): {STUDENT, OWNER, REFILLER, ADMIN},
     ("POST", "/v1/app/orders/{order_id}/verify"): {STUDENT, OWNER, REFILLER, ADMIN},

@@ -9,6 +9,7 @@ through their **public surfaces only**, never their tables, which the
 `orders-uses-surfaces-not-tables` contract enforces.
 """
 
+from app.modules.orders.invoice import render_invoice
 from app.modules.orders.models import (
     SETTLED_ORDER_STATES,
     ItemKind,
@@ -68,6 +69,7 @@ __all__ = [
     "order_for",
     "document_is_in_an_order",
     "orders_at_kiosks",
+    "render_invoice",
     "paid_orders_at_kiosks",
     "orders_of",
     "mark_paid",

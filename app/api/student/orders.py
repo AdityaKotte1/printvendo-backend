@@ -17,7 +17,7 @@ amount at the gateway.
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
@@ -51,6 +51,7 @@ from app.modules.orders import (
     orders_of,
     pay_with_wallet,
     place_order,
+    render_invoice,
     view_of,
 )
 from app.modules.payments import (
@@ -190,6 +191,44 @@ def get_order(
     db: Annotated[Session, Depends(get_db)],
 ) -> OrderResponse:
     return _as_response(view_of(db, _order_or_404(db, user, order_id)))
+
+
+NOT_PAID_YET = "There is no receipt for this order yet, because it has not been paid for."
+
+
+@router.get("/{order_id}/invoice")
+def order_invoice(
+    order_id: str,
+    user: CurrentUser,
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    """The receipt for a paid order, as a PDF.
+
+    **Bytes from an authenticated route, never a URL.** The old backend minted a
+    signed link and handed it to the browser; the same rule that governs a
+    bank-detail proof governs this, and for the same reason -- a document that
+    can be fetched without proving who you are is a document anybody can fetch.
+
+    Only a paid order has one. An unpaid order is a quote, and a PDF headed
+    "Total paid" against money nobody has taken is a thing to wave at a shop
+    counter.
+    """
+    order = _order_or_404(db, user, order_id)
+    if order.paid_at is None:
+        raise Conflict(NOT_PAID_YET)
+
+    pdf = render_invoice(view_of(db, order), student_email=user.email)
+
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            # Named by the order's own id: a downloads folder with six receipts
+            # in it should say which is which, and the id is what support asks
+            # for. `inline` so a phone opens it rather than silently saving it.
+            "Content-Disposition": f'inline; filename="printvendo-{order.public_id}.pdf"'
+        },
+    )
 
 
 @router.post("/{order_id}/pay/wallet", response_model=OrderResponse)
