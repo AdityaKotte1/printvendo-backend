@@ -7,7 +7,7 @@ from app.modules.identity.models import User
 from app.modules.identity.roles import Role
 from app.modules.kiosks.enums import AssignmentRole
 from app.modules.kiosks.models import Kiosk, KioskAssignment
-from app.modules.kiosks.scope import Scope, kiosk_scope
+from app.modules.kiosks.scope import Scope, kiosk_scope, system_scope
 
 
 def _user(db_session, email: str, *roles: Role) -> User:
@@ -141,3 +141,19 @@ def test_a_refiller_at_one_kiosk_of_an_owner_with_many(db_session):
     _assign(db_session, a, refiller, AssignmentRole.REFILLER)
 
     assert kiosk_scope(db_session, refiller).kiosk_ids == {a.id}
+
+
+def test_a_sweep_gets_every_kiosk_without_pretending_to_be_an_admin():
+    """A scheduled job has no actor, and needs one name for saying so.
+
+    The alternative is each background caller writing
+    `Scope(is_unrestricted=True, ...)` for itself, which is the same admin
+    bypass the old backend had in a second router -- just spelled differently
+    in each place it appears.
+    """
+    assert system_scope().is_unrestricted is True
+
+
+def test_the_dangerous_scope_still_cannot_be_typed_by_accident():
+    with pytest.raises(TypeError):
+        Scope()

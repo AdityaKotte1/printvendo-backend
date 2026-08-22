@@ -3,7 +3,7 @@ from collections.abc import Iterator
 import pytest
 from sqlalchemy import text
 
-from app.core.db import Base, get_engine, session_scope
+from app.core.db import Base, advisory_lock, get_engine, session_scope
 
 
 @pytest.fixture
@@ -99,3 +99,59 @@ def test_enum_columns_load_back_as_the_enum(db_session):
     assert kiosk.kiosk_type.value == "platform"
 
     assert isinstance(AssignmentRole.OWNER, AssignmentRole)
+
+
+# ── the advisory lock ───────────────────────────────────────────────────────
+
+LOCK_KEY = 918_273_001
+
+
+def test_one_holder_takes_the_lock(postgres_url):
+    with get_engine(postgres_url).connect() as connection:
+        with advisory_lock(connection, LOCK_KEY) as acquired:
+            assert acquired is True
+
+
+def test_a_second_holder_is_told_no_rather_than_made_to_wait(postgres_url):
+    """`try` is the whole point.
+
+    Four workers wake on the same schedule. A blocking lock would queue all
+    four, so the sweep would run four times in a row instead of once -- the
+    behaviour the lock exists to prevent, arrived at slowly.
+    """
+    engine = get_engine(postgres_url)
+    with engine.connect() as first, engine.connect() as second:
+        with advisory_lock(first, LOCK_KEY) as held:
+            assert held is True
+            with advisory_lock(second, LOCK_KEY) as also:
+                assert also is False
+
+
+def test_the_lock_is_free_again_afterwards(postgres_url):
+    engine = get_engine(postgres_url)
+    with engine.connect() as first:
+        with advisory_lock(first, LOCK_KEY):
+            pass
+    with engine.connect() as second:
+        with advisory_lock(second, LOCK_KEY) as acquired:
+            assert acquired is True
+
+
+def test_a_failure_inside_the_lock_still_releases_it(postgres_url):
+    """A job that raises must not take the schedule down with it for ever."""
+    engine = get_engine(postgres_url)
+    with engine.connect() as first:
+        with pytest.raises(RuntimeError):
+            with advisory_lock(first, LOCK_KEY):
+                raise RuntimeError("the job failed")
+
+    with engine.connect() as second:
+        with advisory_lock(second, LOCK_KEY) as acquired:
+            assert acquired is True
+
+
+def test_different_keys_do_not_block_each_other(postgres_url):
+    engine = get_engine(postgres_url)
+    with engine.connect() as first, engine.connect() as second:
+        with advisory_lock(first, LOCK_KEY), advisory_lock(second, LOCK_KEY + 1) as other:
+            assert other is True

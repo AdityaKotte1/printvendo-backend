@@ -83,6 +83,11 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     ("GET", "/v1/owner/earnings"): {OWNER, ADMIN},
     ("GET", "/v1/owner/earnings/by-kiosk"): {OWNER, ADMIN},
     ("GET", "/v1/owner/kiosks/{kiosk_id}/orders"): {OWNER, ADMIN},
+    # The same list as a file, for accounts. Same scope, same audience, and
+    # the same absence of any student: a CSV is built by hand rather than from
+    # a response type, so what the type guarantees above, a test guarantees
+    # there.
+    ("GET", "/v1/owner/kiosks/{kiosk_id}/orders/export"): {OWNER, ADMIN},
     # ── owner payment configuration ─────────────────────────────────────────
     # OWNER only, and not ADMIN: these act on *the caller's own* Razorpay
     # account, resolved from their token. An admin reaching them would be

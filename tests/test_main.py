@@ -104,3 +104,33 @@ def test_app_loggers_are_quiet_outside_dev():
     prod = SETTINGS.model_copy(update={"ENV": "staging"})
     create_app(prod)
     assert logging.getLogger("app").level == logging.WARNING
+
+
+# ── the scheduler ───────────────────────────────────────────────────────────
+
+
+def test_the_sweeps_start_with_the_app(postgres_url):
+    """`expire_stale_orders` and `purge_expired_files` had no caller at all."""
+    app = create_app(_reachable(postgres_url))
+
+    with TestClient(app):
+        assert app.state.scheduler_task is not None
+
+
+def test_the_sweeps_stop_with_the_app(postgres_url):
+    """A background task that outlives its app keeps a connection pool open."""
+    app = create_app(_reachable(postgres_url))
+
+    with TestClient(app):
+        task = app.state.scheduler_task
+
+    assert task.cancelled() or task.done()
+
+
+def test_a_process_can_be_told_not_to_sweep(postgres_url):
+    app = create_app(
+        _reachable(postgres_url).model_copy(update={"SCHEDULER_ENABLED": False})
+    )
+
+    with TestClient(app):
+        assert app.state.scheduler_task is None

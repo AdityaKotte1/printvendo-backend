@@ -90,6 +90,12 @@ class Settings(BaseSettings):
     MAIL_FROM_EMAIL: str = "hello@printvendo.com"
     MAIL_FROM_NAME: str = "Printvendo"
 
+    # Whether this process runs the scheduled sweeps. On by default and safe to
+    # leave on everywhere: every worker asks Postgres for the same advisory lock
+    # and only one of them gets it. Off is for a one-off process -- a shell, a
+    # migration run -- that should not start sweeping the moment it boots.
+    SCHEDULER_ENABLED: bool = True
+
     # ── the edge ────────────────────────────────────────────────────────────
     # Off is never the default. The switch exists for a load test and for an
     # incident where the limiter itself is the problem.

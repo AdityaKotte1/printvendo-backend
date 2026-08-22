@@ -148,3 +148,40 @@ def resolve(
     db.add(alert)
     db.flush()
     return alert
+
+
+def resolve_by_key(
+    db: Session, *, dedupe_key: str, now: datetime | None = None
+) -> AdminAlert | None:
+    """Close the open alert for a condition that has cleared, if there is one.
+
+    For conditions a machine notices and a machine can see the end of -- a kiosk
+    that came back, a tray somebody refilled. The detector holds the dedupe key
+    and never sees a public id, which is why this is not `resolve` with a
+    different lookup.
+
+    Returns None when nothing was open, because that is the ordinary case: a
+    sweep runs every few minutes and almost always finds everything well.
+    Resolving nothing is not a failure and must not read like one.
+
+    Leaves an already-resolved alert exactly as it is, including whoever closed
+    it -- overwriting a person's name with "the system" would lose the one thing
+    the row records about how the problem ended.
+    """
+    alert = db.execute(
+        select(AdminAlert).where(
+            AdminAlert.dedupe_key == dedupe_key,
+            AdminAlert.resolved.is_(False),
+        )
+    ).scalars().first()
+    if alert is None:
+        return None
+
+    alert.resolved = True
+    alert.resolved_at = now or datetime.now(UTC)
+    # No actor: nobody did this. The absence is the record -- "it stopped on its
+    # own" is a different fact from "somebody dealt with it".
+    alert.resolved_by_user_id = None
+    db.add(alert)
+    db.flush()
+    return alert

@@ -14,7 +14,10 @@ with uvicorn's factory flag instead:
     uvicorn app.main:create_app --factory
 """
 
+import asyncio
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,6 +27,7 @@ from app.api.ratelimit import install_rate_limiting
 from app.core.config import Settings, get_settings
 from app.core.db import database_is_reachable
 from app.core.errors import install_error_handlers
+from app.jobs.scheduler import Scheduler
 
 VERSION = "0.1.0"
 
@@ -54,7 +58,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     _configure_logging(settings)
 
-    app = FastAPI(title="PrintVendo API", version=VERSION)
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        """Start the scheduled sweeps with the app, and stop them with it.
+
+        In the app rather than in cron because there is no `deploy/` yet, and a
+        job that runs only when somebody remembers to write a crontab is the
+        same gap in a different file. Running it in every worker is safe: they
+        contend for one advisory lock per job, and exactly one wins.
+        """
+        task = None
+        if settings.SCHEDULER_ENABLED:
+            task = asyncio.create_task(Scheduler(settings).run_forever())
+        app.state.scheduler_task = task
+        try:
+            yield
+        finally:
+            if task is not None:
+                task.cancel()
+                # Awaited, not merely cancelled: without this the shutdown races
+                # the job's own transaction and Postgres sees the connection
+                # drop mid-statement.
+                with suppress(asyncio.CancelledError):
+                    await task
+
+    app = FastAPI(title="PrintVendo API", version=VERSION, lifespan=lifespan)
     app.state.settings = settings
 
     # Order matters, and reads backwards: the last middleware added is the

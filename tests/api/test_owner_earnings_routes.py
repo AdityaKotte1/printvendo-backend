@@ -6,7 +6,7 @@ a legitimate interest in what was printed and what it cost, and none at all in
 who printed it.
 """
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -14,6 +14,7 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from app.api.deps import get_db, get_notifier, get_secret
+from app.api.owner import earnings as earnings_routes
 from app.core.config import Settings
 from app.core.notifier import NullNotifier
 from app.core.security import TokenType, create_token
@@ -266,3 +267,139 @@ def test_a_student_cannot_read_a_shops_earnings(client, db_session, alice, stude
 
 def test_signing_in_is_required(client):
     assert client.get("/v1/owner/earnings").status_code == 401
+
+
+# ── the CSV export ──────────────────────────────────────────────────────────
+
+
+def _export(client, user, kiosk, **params):
+    return client.get(
+        f"/v1/owner/kiosks/{kiosk.public_id}/orders/export",
+        headers=_auth(user),
+        params=params,
+    )
+
+
+def test_the_export_is_a_csv_with_a_header_and_a_row_per_order(
+    client, db_session, alice, student
+):
+    kiosk = _kiosk(db_session, alice, "Alice Print")
+    order = a_paid_order(db_session, student, kiosk)
+
+    response = _export(client, alice, kiosk)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    rows = [line for line in response.text.splitlines() if line]
+    assert rows[0].startswith("order_id,")
+    assert len(rows) == 2
+    assert order.public_id in rows[1]
+
+
+def test_the_export_carries_no_trace_of_who_printed(client, db_session, alice, student):
+    """The same rule as the JSON list, which has no field for a person at all.
+
+    A CSV is built by hand rather than from a response type, so this is the one
+    place that rule has to be kept by a test instead of by a schema. Filenames
+    are left out for the same reason: "Medical Results Ravi Kumar.pdf" names a
+    person as surely as an email address does.
+    """
+    kiosk = _kiosk(db_session, alice, "Alice Print")
+    a_paid_order(db_session, student, kiosk)
+
+    response = _export(client, alice, kiosk)
+
+    # Asserted before reading the body: "the email is not in this 404" is a
+    # test that cannot fail, and one of those has already shipped here.
+    assert response.status_code == 200
+    body = response.text
+    assert STUDENT_EMAIL not in body
+    assert "Ravi Kumar" not in body
+
+
+def test_an_unpaid_order_is_not_in_the_takings(client, db_session, alice, student):
+    kiosk = _kiosk(db_session, alice, "Alice Print")
+    document = Document(
+        user_id=student.id,
+        original_filename="unpaid.pdf",
+        page_count=2,
+        original_path="originals/2026/08/unpaid.pdf",
+        state=DocumentState.READY,
+    )
+    db_session.add(document)
+    db_session.flush()
+    place_order(
+        db_session,
+        user=student,
+        kiosk=kiosk,
+        requests=[
+            RequestedDocument(
+                document=document, options=PrintOptions.create(total_pages=2)
+            )
+        ],
+        method=PaymentMethod.GATEWAY,
+    )
+
+    response = _export(client, alice, kiosk)
+
+    assert response.status_code == 200
+    rows = [line for line in response.text.splitlines() if line]
+    assert len(rows) == 1, "the header row and nothing else"
+
+
+def test_the_window_is_honoured(client, db_session, alice, student):
+    kiosk = _kiosk(db_session, alice, "Alice Print")
+    a_paid_order(db_session, student, kiosk)
+
+    response = _export(
+        client,
+        alice,
+        kiosk,
+        until=(datetime.now(UTC) - timedelta(days=1)).isoformat(),
+    )
+
+    assert response.status_code == 200
+    rows = [line for line in response.text.splitlines() if line]
+    assert len(rows) == 1, "the header row and nothing else"
+
+
+def test_another_owners_kiosk_is_not_there_to_export(client, db_session, alice, bob):
+    kiosk = _kiosk(db_session, alice, "Alice Print")
+
+    response = _export(client, bob, kiosk)
+
+    assert response.status_code == 404
+
+
+def test_a_range_too_large_to_export_is_refused_rather_than_truncated(
+    client, db_session, alice, student, monkeypatch
+):
+    """A silently truncated accounting export is a wrong number nobody can see.
+
+    Refusing costs somebody a second request with a shorter range. Truncating
+    costs them a reconciliation that will never balance.
+    """
+    monkeypatch.setattr(earnings_routes, "MAX_EXPORT_ROWS", 1)
+    kiosk = _kiosk(db_session, alice, "Alice Print")
+    a_paid_order(db_session, student, kiosk)
+    a_paid_order(db_session, student, kiosk)
+
+    response = _export(client, alice, kiosk)
+
+    assert response.status_code == 400
+    assert "shorter" in response.json()["detail"]
+
+
+def test_the_filename_cannot_be_bent_by_a_kiosks_name(client, db_session, alice):
+    """A shop's name is somebody else's text, and a header is a line-based format.
+
+    The download is named by the kiosk's opaque id for that reason -- a name
+    carrying a quote or a newline would otherwise rewrite the response headers.
+    """
+    kiosk = _kiosk(db_session, alice, 'Alice "Print"\r\nX-Injected: yes')
+
+    disposition = _export(client, alice, kiosk).headers["content-disposition"]
+
+    assert kiosk.public_id in disposition
+    assert "\n" not in disposition and "\r" not in disposition
+    assert "X-Injected" not in disposition

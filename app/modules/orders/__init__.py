@@ -42,6 +42,7 @@ from app.modules.orders.views import (
     order_for,
     orders_at_kiosks,
     orders_of,
+    paid_orders_at_kiosks,
     view_of,
 )
 
@@ -65,6 +66,7 @@ __all__ = [
     "gateway_fee",
     "order_for",
     "orders_at_kiosks",
+    "paid_orders_at_kiosks",
     "orders_of",
     "mark_paid",
     "pay_with_wallet",

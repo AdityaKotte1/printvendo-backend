@@ -104,3 +104,30 @@ def session_scope(url: str) -> Iterator[Session]:
         raise
     finally:
         session.close()
+
+
+@contextmanager
+def advisory_lock(connection, key: int) -> Iterator[bool]:
+    """Hold a named lock for as long as the block runs, or find out somebody else has.
+
+    What makes `--workers 4` safe for a scheduled sweep: every worker wakes on
+    the same schedule and asks for the same lock, exactly one gets it, and the
+    other three go back to sleep instead of running the sweep three more times.
+
+    `try` rather than a blocking acquire, deliberately. A blocking lock would
+    queue the other three and run the job four times in a row -- the behaviour
+    the lock exists to prevent, arrived at slowly instead of quickly.
+
+    Released in a finally, so a job that raises does not hold the lock until the
+    connection is recycled -- which, in a pool, can be a very long time.
+    """
+    acquired = bool(
+        connection.execute(
+            text("select pg_try_advisory_lock(:key)"), {"key": key}
+        ).scalar()
+    )
+    try:
+        yield acquired
+    finally:
+        if acquired:
+            connection.execute(text("select pg_advisory_unlock(:key)"), {"key": key})

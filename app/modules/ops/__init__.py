@@ -14,6 +14,7 @@ from app.modules.ops.alerts import (
     open_alerts,
     raise_alert,
     resolve,
+    resolve_by_key,
 )
 from app.modules.ops.audit import entries_for, record, scrub
 from app.modules.ops.models import AdminAlert, AlertSeverity, AuditEntry
@@ -27,5 +28,6 @@ __all__ = [
     "raise_alert",
     "record",
     "resolve",
+    "resolve_by_key",
     "scrub",
 ]

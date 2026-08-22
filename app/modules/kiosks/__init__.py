@@ -54,7 +54,7 @@ from app.modules.kiosks.registry import (
     set_active,
     set_location,
 )
-from app.modules.kiosks.scope import Scope, kiosk_scope
+from app.modules.kiosks.scope import Scope, kiosk_scope, system_scope
 from app.modules.kiosks.staffing import (
     accept_invite,
     invite_staff,
@@ -89,6 +89,7 @@ __all__ = [
     "is_selling",
     "issue_enrolment_code",
     "kiosk_scope",
+    "system_scope",
     "move_to",
     "read_pricing",
     "reconcile_billing_state",

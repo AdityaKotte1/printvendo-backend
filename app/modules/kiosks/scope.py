@@ -46,3 +46,19 @@ def kiosk_scope(db: Session, actor: User) -> Scope:
     stmt = select(KioskAssignment.kiosk_id).where(KioskAssignment.user_id == actor.id)
     assigned = frozenset(db.execute(stmt).scalars())
     return Scope(is_unrestricted=False, kiosk_ids=assigned)
+
+
+def system_scope() -> Scope:
+    """Every kiosk, for work that is not being done on anybody's behalf.
+
+    A scheduled sweep -- the offline watcher, the paper watcher -- has no actor
+    to resolve a scope from, and must still see the whole estate. This is the
+    one place that says so. The alternative is each caller writing
+    `Scope(is_unrestricted=True, kiosk_ids=frozenset())` inline, which is the
+    old backend's admin bypass again: the same decision made in several places,
+    spelled slightly differently in each, and greppable from none of them.
+
+    Not reachable from a request. Nothing in `app/api` calls it; a route that
+    wanted this would be asking for an admin bypass and should say so out loud.
+    """
+    return Scope(is_unrestricted=True, kiosk_ids=frozenset())

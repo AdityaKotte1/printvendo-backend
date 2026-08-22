@@ -20,9 +20,9 @@ SECRET = "s" * 32
 
 
 def _settings(**extra) -> Settings:
+    extra.setdefault("DATABASE_URL", "postgresql+psycopg://u:p@localhost:5432/pv")
     return Settings(
         ENV="dev",
-        DATABASE_URL="postgresql+psycopg://u:p@localhost:5432/pv",
         REDIS_URL="redis://localhost:6379/0",
         JWT_SECRET_KEY=SECRET,
         SECRETS_ENCRYPTION_KEY=Fernet.generate_key().decode(),
@@ -40,11 +40,15 @@ class SilentNotifier:
 
 
 @pytest.fixture
-def make_client(db_session):
-    """A client per settings, each with its own limiter storage."""
+def make_client(db_session, postgres_url):
+    """A client per settings, each with its own limiter storage.
+
+    Pointed at the real test database because `/health` runs `select 1` now, and
+    the unlimited-route test below would otherwise be reading a 503.
+    """
 
     def _make(**extra) -> TestClient:
-        app = create_app(_settings(**extra))
+        app = create_app(_settings(DATABASE_URL=postgres_url, **extra))
         app.dependency_overrides[get_db] = lambda: db_session
         app.dependency_overrides[get_secret] = lambda: SECRET
         app.dependency_overrides[get_notifier] = lambda: SilentNotifier()
@@ -188,6 +192,8 @@ def test_a_shared_socket_peer_shares_the_bucket_when_no_proxy_is_trusted(make_cl
 
 def test_an_unlimited_route_is_never_refused(client):
     for _ in range(FORGOT_PER_MINUTE * 3):
+        # 200 rather than "not 429": a probe that started failing for some other
+        # reason would otherwise satisfy this test for ever.
         assert client.get("/health").status_code == 200
 
 

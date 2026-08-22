@@ -12,7 +12,13 @@ import pytest
 
 from app.core.errors import NotFound
 from app.modules.identity.models import User
-from app.modules.ops import AlertSeverity, open_alerts, raise_alert, resolve
+from app.modules.ops import (
+    AlertSeverity,
+    open_alerts,
+    raise_alert,
+    resolve,
+    resolve_by_key,
+)
 
 
 @pytest.fixture
@@ -167,3 +173,47 @@ def test_a_secret_in_the_detail_is_redacted(db_session):
     )
 
     assert "must-not-appear" not in str(alert.detail)
+
+
+# ── a condition that clears itself ──────────────────────────────────────────
+
+
+def test_a_cleared_condition_can_be_resolved_by_its_key(db_session):
+    """A detector that raises must be able to stand down.
+
+    A kiosk that was offline for ten minutes and came back leaves an open alert
+    nobody will close by hand, and a console of stale rows is the wall of
+    identical notifications this table exists to avoid -- reached by a different
+    road. The detector knows the dedupe key; it does not know the public id.
+    """
+    offline(db_session)
+
+    resolved = resolve_by_key(db_session, dedupe_key="kiosk.offline:ksk_1")
+
+    assert resolved is not None
+    assert resolved.resolved is True
+    assert open_alerts(db_session) == []
+
+
+def test_standing_down_a_condition_nobody_raised_is_not_an_error(db_session):
+    """The ordinary case: the sweep runs, everything is fine, nothing to close."""
+    assert resolve_by_key(db_session, dedupe_key="kiosk.offline:ksk_1") is None
+
+
+def test_standing_down_does_not_reach_an_alert_somebody_already_closed(db_session, operator):
+    raised = offline(db_session)
+    resolve(db_session, public_id=raised.public_id, actor_user_id=operator.id)
+
+    resolve_by_key(db_session, dedupe_key="kiosk.offline:ksk_1")
+
+    assert raised.resolved_by_user_id == operator.id
+
+
+def test_a_condition_that_comes_back_after_standing_down_is_a_new_alert(db_session):
+    first = offline(db_session)
+    resolve_by_key(db_session, dedupe_key="kiosk.offline:ksk_1")
+
+    second = offline(db_session)
+
+    assert second.id != first.id
+    assert second.occurrences == 1

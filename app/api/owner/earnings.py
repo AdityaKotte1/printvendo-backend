@@ -14,10 +14,12 @@ backend's `/owner/*` was a second router with a "DO NOT LOOSEN" comment where a
 check should have been.
 """
 
+import csv
+import io
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import KioskScope, get_db, require_role
@@ -26,13 +28,41 @@ from app.api.schemas import (
     KioskEarningsResponse,
     OwnerOrderResponse,
 )
+from app.core.errors import BadRequest
 from app.modules.identity import User
 from app.modules.identity.roles import Role
 from app.modules.kiosks import repository as kiosk_repo
-from app.modules.orders import orders_at_kiosks
+from app.modules.orders import orders_at_kiosks, paid_orders_at_kiosks
 from app.modules.payments import Earnings, earnings_by_kiosk, earnings_for_kiosks
 
 router = APIRouter(prefix="/v1/owner", tags=["owner"])
+
+# An export is a whole-file download built in memory, so it needs a ceiling. Ten
+# thousand rows is several years of a busy shop and a few megabytes of CSV.
+MAX_EXPORT_ROWS = 10_000
+
+TOO_MANY_ROWS = (
+    "That period has more orders than one export can hold. "
+    "Please choose a shorter period."
+)
+
+# No filename, no student, no free text of any kind: an owner has a legitimate
+# interest in what was printed and what it cost, and none at all in who printed
+# it. "Medical Results Ravi Kumar.pdf" names a person as surely as an address
+# does. Every column here is an id, a date, an enum or a number, which is also
+# why no cell can begin with `=` and be run as a formula by a spreadsheet.
+EXPORT_COLUMNS = (
+    "order_id",
+    "paid_at",
+    "state",
+    "payment_method",
+    "documents",
+    "sheets",
+    "subtotal_inr",
+    "fee_inr",
+    "total_inr",
+    "refunded_at",
+)
 
 CurrentOwner = Annotated[User, Depends(require_role(Role.OWNER))]
 
@@ -123,3 +153,71 @@ def kiosk_orders(
         )
         for view in orders_at_kiosks(db, kiosk_ids=[kiosk.id], limit=limit)
     ]
+
+
+@router.get("/kiosks/{kiosk_id}/orders/export")
+def export_kiosk_orders(
+    kiosk_id: str,
+    owner: CurrentOwner,
+    scope: KioskScope,
+    db: Annotated[Session, Depends(get_db)],
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> Response:
+    """This shop's takings over a period, as a file for a spreadsheet.
+
+    Paid orders only, windowed on when the money was taken, because this has to
+    reconcile with `/v1/owner/earnings` above it. An export whose total
+    disagrees with the figure on the page is worse than no export.
+
+    **Refused rather than truncated** past `MAX_EXPORT_ROWS`. A silently short
+    CSV is a wrong number that looks exactly like a right one, and the person
+    reading it is doing accounts.
+    """
+    kiosk = kiosk_repo.get_kiosk(db, scope, kiosk_id)
+
+    # One more than the cap: enough to know the range is too big without
+    # counting the whole thing first.
+    views = paid_orders_at_kiosks(
+        db,
+        kiosk_ids=[kiosk.id],
+        since=since,
+        until=until,
+        limit=MAX_EXPORT_ROWS + 1,
+    )
+    if len(views) > MAX_EXPORT_ROWS:
+        raise BadRequest(TOO_MANY_ROWS)
+
+    buffer = io.StringIO()
+    # Excel on Windows needs CRLF, and `csv` writes it only if asked. The
+    # StringIO is newline-agnostic, so this is the one place it is decided.
+    writer = csv.writer(buffer, lineterminator="\r\n")
+    writer.writerow(EXPORT_COLUMNS)
+    for view in views:
+        writer.writerow(
+            (
+                view.id,
+                view.paid_at.isoformat() if view.paid_at else "",
+                view.state.value,
+                view.payment_method or "",
+                len(view.items),
+                sum(item.sheets for item in view.items),
+                view.subtotal_inr,
+                view.fee_inr,
+                view.total_inr,
+                view.refunded_at.isoformat() if view.refunded_at else "",
+            )
+        )
+
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            # Named by the opaque id, never by the shop's name. A name is
+            # somebody else's text and a header is a line-based format: one
+            # carrying a quote or a newline would rewrite the response headers.
+            "Content-Disposition": (
+                f'attachment; filename="{kiosk.public_id}-orders.csv"'
+            )
+        },
+    )

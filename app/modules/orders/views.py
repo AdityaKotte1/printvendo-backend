@@ -172,6 +172,44 @@ def orders_at_kiosks(
     return [_view(o, kiosks, documents) for o in orders]
 
 
+def paid_orders_at_kiosks(
+    db: Session,
+    *,
+    kiosk_ids: list[int],
+    since: datetime | None = None,
+    until: datetime | None = None,
+    limit: int = 50,
+) -> list[OrderView]:
+    """What these kiosks actually took over a window, newest payment first.
+
+    Windowed on `paid_at`, and paid orders only, because this is the list behind
+    an owner's export and it has to reconcile with `/v1/owner/earnings` -- which
+    windows on when the money was captured. An export whose total disagrees with
+    the figure on the page above it is worse than no export: somebody then has
+    to work out which of the two is lying.
+
+    `until` is exclusive, for the same reason it is there: so "this day" means
+    one day rather than one day and a moment.
+    """
+    if not kiosk_ids:
+        return []
+
+    stmt = (
+        select(Order)
+        .where(Order.kiosk_id.in_(kiosk_ids), Order.paid_at.is_not(None))
+        .order_by(Order.paid_at.desc(), Order.id.desc())
+        .limit(limit)
+    )
+    if since is not None:
+        stmt = stmt.where(Order.paid_at >= since)
+    if until is not None:
+        stmt = stmt.where(Order.paid_at < until)
+
+    orders = list(db.execute(stmt).scalars())
+    kiosks, documents = _public_ids(db, orders)
+    return [_view(o, kiosks, documents) for o in orders]
+
+
 def orders_of(db: Session, *, user_id: int, limit: int = 50) -> list[OrderView]:
     """This student's orders, newest first."""
     orders = list(
