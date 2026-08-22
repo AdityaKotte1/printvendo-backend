@@ -4,7 +4,7 @@ Read `CLAUDE.md` first — it carries the conventions and the state of play, and
 it is loaded automatically. This file carries only what CLAUDE.md does not: the
 exact point work stopped, and the traps that cost time.
 
-**Last updated: 2026-08-22, at commit `ba3b162`.**
+**Last updated: 2026-08-22, at commit `02107ab`.**
 
 Update this file at the end of a session. Delete anything that has become true
 in CLAUDE.md — two documents describing the same thing is how they drift.
@@ -14,7 +14,7 @@ in CLAUDE.md — two documents describing the same thing is how they drift.
 ## Where things stand
 
 ```
-1304 tests passing · 11 import contracts · ruff clean · 96 routes (29 admin)
+1406 tests passing · 12 import contracts · ruff clean · 97 routes (29 admin)
 ```
 
 Verify before trusting that line:
@@ -24,7 +24,10 @@ Verify before trusting that line:
 ```
 
 **Done:** core, identity, kiosks, payments, billing, printing, orders, wallet,
-ops, every api layer including admin, and the **device socket**.
+ops, every api layer including admin, the **device socket**, and — this session
+— **Phase 1, the backend's last wiring**: rate limits, a `/health` that asks the
+database, the scheduler and its four sweeps, the first `raise_alert` callers,
+and the owner orders CSV.
 
 **Next, in dependency order:** migration → agent → cutover. The migration's
 three blocking decisions are answered; it is waiting on a production dump, not
@@ -82,69 +85,61 @@ in one transaction and refuse to finish if the totals disagree.
 
 ### If you would rather not start there
 
-All unblocked, in rough order of value: the **agent rewrite** (the Pi must learn
-`/v1/device/ws`, treat `{"type": "wake"}` as "ask now", and keep polling as the
-fallback); a **scheduler** for `expire_stale_orders` and `purge_expired_files`,
-which have no caller; **the first callers for `ops.raise_alert`**, since the
-admin console is correct and empty; or **sending email for real**, since every
-invitation and password reset is currently a log line.
+The phase plan agreed with the operator runs: **1 backend finishing** (done),
+**2 deploy**, **3 Pi agent**, **4 student app**, **5 migration rehearsal**,
+**6 cutover**, **7 the remaining consoles**. Phases 2 and 5 need something from
+the operator — server access, DNS, a Brevo key, production Razorpay keys, and a
+fresh dump — so the unblocked work is:
+
+- the **agent rewrite** (the Pi must learn `/v1/device/ws`, treat
+  `{"type": "wake"}` as "ask now", and keep polling as the fallback);
+- the **migration reader** above, on synthetic data;
+- the **student app's `lib/api.ts`**, which still calls the legacy contract —
+  see Frontends below and
+  `docs/superpowers/specs/2026-08-22-student-app-api-gap.md`, which maps every
+  call the app makes onto this backend and lists what has no home on either
+  side. Its first item is small and overdue: the app has no
+  `/verify-email`, `/reset-password` or `/accept-invite` page, and since
+  `38c15be` those emails are really being sent.
 
 ---
 
 ## Traps that cost time in this session
 
-**`pathlib.read_text()` defaults to cp1252 on this machine.** Editing a file
-that contains box-drawing characters — `matrix.py`, `audit_matrix.py`, most
-module docstrings — silently fails to match, and a naive round-trip risks
-mangling them. Always pass `encoding="utf-8"` to both `read_text` and
-`write_text`.
+**`git checkout <file>` is not how you undo a mutation.** Reverting `app/main.py`
+after a mutation test also reverted the wiring that had been added to it minutes
+earlier, and the file it was meant to restore — `app/api/ratelimit.py` — was
+untracked, so the mutation stayed in place while the real work was thrown away.
+Copy the file aside, or edit it back.
 
-**A `+` in a query string is a space.** `client.get(f"...?since={iso}")` with an
-offset-aware datetime produced a 422, and the test failed on a `KeyError` in the
-response body rather than on anything real. Pass `params={...}` and let the
-client encode it.
+**A command whose exit code you are reading may be failing for another reason.**
+`lint-imports > /dev/null` exits 1 on this machine whatever the contracts say:
+redirecting stdout puts `rich` into legacy-Windows rendering, which cannot
+encode its own banner in cp1252. Two "the contract caught it" results were that
+crash. `PYTHONIOENCODING=utf-8` fixes it, and `tests/test_architecture.py`
+already knew — it passes an encoding for exactly this reason.
 
-**Bash heredocs choke on some of this prose.** Writing a test file with `cat
-<<'EOF'` failed with "unexpected EOF"; the Write tool is the reliable path for
-anything with apostrophes and unicode in it.
+**import-linter: `|` means independent, `:` does not.** `app.jobs : app.api`
+looked like it declared two composition roots that may not import each other,
+and allowed a job to import the api layer. Only the mutation test found it.
 
-**A test can pass before the route exists.** `test_the_queue_never_carries_a
-_storage_path` asserted `"proofs/" not in body` and passed against a 404. It
-only became a real check once the route was written. Assert something the empty
-case cannot satisfy, or run it once with the implementation in place.
+**Two pytest sessions against one Postgres deadlock.** A foreground run started
+while a background full run was going produced `DeadlockDetected` in a test that
+was fine. Wait for the background one.
 
-**A surviving mutation may mean the test is aimed at the wrong property.**
-Removing `revoke_all` from account deactivation broke nothing, because
-`rotate_refresh` already refuses an inactive user — so a refresh attempted while
-the account is off fails either way. The property the revocation is actually
-load-bearing for is that a token taken *before* deactivation is still dead
-*after* reactivation. That test now exists and was confirmed to fail without the
-revocation.
+**A test can pass before the route exists — again.** Four of the CSV export
+tests passed against a 404, including "the student's email is not in the body".
+They assert the status code first now. This is the second session in a row this
+has happened; assume any new API test is vacuous until you have seen it fail.
 
-**Check the shape a route returns before asserting on it.** Two billing tests
-read `body["on_trial"]` where the response nests it under `subscription`. Same
-class of mistake as last session's `effective_prices` returns-a-dict.
+**Adding a database read to `/health` broke a test that had nothing to do with
+health.** Several test modules build `Settings` with a `DATABASE_URL` pointing
+at a database that does not exist, which was harmless while `/health` only
+looked at the framework.
 
-**A test can be undisprovable rather than merely weak.** A socket test
-published one kiosk's wake and expected another's message; it could not fail,
-because every wake reads `{"type": "wake"}` and the wrong one is
-indistinguishable from the right one. Assert on what the code *chose* -- which
-channel it subscribed to -- not on which of two identical messages arrived.
-
-**Two harnesses collect routes, and they disagree about shape.**
-`tests/authz` now yields WebSocket routes under the pseudo-method `WS`;
-`tests/ops` imports the same `_flatten` and asks for `.methods`, which a
-WebSocket route does not have. If you add another route kind, check both.
-
-**Check that a database has tables, not just that it exists.** `printit_legacy`
-connects happily and answers queries; it simply has nothing in it. "The dump is
-restored" was true when the audit was written and had quietly stopped being
-true. `select count(*) from information_schema.tables where
-table_schema='public'` is the check that would have caught it.
-
-**A new paper tray is full, not empty.** Paper is stored as sheets *used*, so
-`used = 0` is a fresh ream. A test asserting `sheets_remaining == 0` on a new
-kiosk is asserting the opposite of the intended behaviour.
+**A paper counter that reads full is a sweep that reports nothing.** Paper is
+stored as sheets *used*, so a `KioskPaper` row with `used = 0` is a full tray.
+Test fixtures for the low-paper watcher have to set `used = capacity - wanted`.
 
 ---
 
@@ -200,27 +195,30 @@ then sets NOT NULL.
 
 Real, currently unowned, and none of them blocks the migration.
 
-- **Nothing runs on a schedule.** `expire_stale_orders` and
-  `purge_expired_files` have no caller. Unpaid orders hold reserved paper
-  forever and `FILE_RETENTION_DAYS = 7` is a promise nothing keeps.
-- **Email is logged, not sent.** `LoggingNotifier` is wired; `BREVO_API_KEY` is
-  read by nothing. In prod the app logger sits at WARNING, so password reset is
-  effectively inert — and now so is every staff and owner invitation, including
-  the one that assigns a kiosk to the shop that bought it.
-- **Nothing raises an alert yet.** `ops.raise_alert` has an admin surface to be
-  read from and no caller: no kiosk-offline detector, no low-paper watcher, no
-  unsettled-payment sweep. The console will be correct and empty.
 - **A subscription cannot be bought.** An admin can grant a trial and set terms,
   and `quote_subscription` prices a renewal, but there is no purchase route —
   `WebhookSettlement.settle_subscription` logs an error precisely because
   nothing can reach it. Owners are currently on trials or nothing.
-- **No rate limiting.** `slowapi` is a dependency and is wired to nothing.
-- **`/health` never touches the database.**
-- **Redis is now genuinely required in production**, not merely claimed by the
-  Dockerfile: `--workers 4` is correct only because the wake goes through
-  pub/sub. Without Redis the socket degrades to nothing and devices poll, which
-  is the pre-socket behaviour and still correct.
-- **No `deploy/`** — no compose file, proxy config, backups or cron.
+- **Rate limits are per address, not per account.** Enough to stop a script,
+  not enough to stop credential stuffing aimed at one person, because a campus
+  shares one NAT and the tight limit that would work locks out a lecture hall.
+  Doing it properly needs the email out of the request body, which is a route's
+  business rather than the edge's.
+- **Nothing sweeps for unsettled payments.** Two of the three watchers the
+  alerts table was built for exist (offline kiosks, paper); money that was
+  taken and never settled is the third and has no detector.
+- **Redis is genuinely required in production**, not merely claimed by the
+  Dockerfile: `--workers 4` is correct for the wake because it goes through
+  pub/sub, and correct for the rate limiter because its counts do too. Without
+  Redis the socket degrades to polling and the limiter counts per process,
+  which enforces four times the configured number — silently. `ENV != dev`
+  chooses Redis, so there is no way to configure that mistake.
+- **`TRUST_PROXY_HEADERS` must be set at deploy.** Behind Caddy or nginx and
+  left false, every request arrives from the proxy and the whole internet
+  shares one rate-limit bucket. Set true with no proxy in front and anyone can
+  mint a fresh bucket per request.
+- **No `deploy/`** — no compose file, proxy config, backups or cron. Cron
+  matters less than it did: the sweeps run in the app.
 
 ---
 

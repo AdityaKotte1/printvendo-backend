@@ -7,8 +7,9 @@ and the reasoning behind everything below.
 
 ## Stack
 
-Python 3.12, FastAPI, SQLAlchemy 2.0, Postgres, Alembic. Redis is a declared
-dependency but nothing connects to it until the device WebSocket hub lands.
+Python 3.12, FastAPI, SQLAlchemy 2.0, Postgres, Alembic. Redis carries the
+device wake and, anywhere with more than one worker, the rate limiter's counts;
+dev runs without it and both degrade rather than break.
 
 ## Commands
 
@@ -188,6 +189,47 @@ Copy `.env.example` to `.env` and fill it. The app refuses to boot with a
   a shop's takings on. A second grant extends the first rather than adding a
   row: two live trials would make "when does this stop being free" a question
   with two answers, and `active_subscription` takes the longest-running one.
+- **Rate limits are a table, not a decorator.** `app/api/ratelimit.py` holds
+  (method, path) → windows and an ASGI middleware applies them before routing,
+  so a refused request costs no session and no query. A decorator per route is
+  a thing somebody has to remember, and the one nobody added looks exactly like
+  a route that was considered and left open. Coverage is derived from
+  `tests/authz/matrix.py`: every route callable without a credential must
+  appear in `LIMITS` or in `UNLIMITED` **with a reason**. The limits are
+  per-address and campus-NAT-aware — two hundred students share one IP — so
+  they bound a script, not a person; per-account limits need the email out of
+  the body and do not exist yet.
+- **The limiter fails open, the payment gate fails closed.** A Redis outage
+  that refused every login would be an outage of the product to protect it from
+  an abuse that may not be happening, and nothing the limiter guards is
+  unguarded by a password or a signature.
+- **`/health` runs `select 1`.** A probe answering 200 from the framework alone
+  answers the one question nobody is asking. 503 when the database is
+  unreachable, because the thing reading it is a load balancer.
+- **`app/jobs/` is a composition root, like `app/api`.** It may know several
+  contexts at once — the paper watcher reads kiosks and writes an ops alert —
+  but reaches them through their surfaces, and the two roots may not import
+  each other (`app.jobs | app.api`; the pipe means *independent*, a colon does
+  not, and that was verified rather than assumed).
+- **Every worker runs the scheduler; the advisory lock decides.** One
+  `pg_try_advisory_lock` per job, never a blocking acquire — queueing the other
+  three workers would run the sweep four times in a row, which is the thing the
+  lock is for.
+- **A watcher that raises must stand down.** `ops.resolve_by_key` closes the
+  alert when the condition clears, with no actor recorded: "it stopped on its
+  own" is a different fact from "somebody dealt with it". Otherwise the console
+  fills with shops that were briefly offline last week, which is the wall of
+  unread notifications the alerts table exists to avoid.
+- **A background sweep reads through `kiosks.system_scope()`.** One named way
+  to say "not on anybody's behalf". Each caller writing
+  `Scope(is_unrestricted=True, …)` inline would be the old backend's admin
+  bypass, spelled differently in every place it appears.
+- **An export is refused rather than truncated.** Past `MAX_EXPORT_ROWS` the
+  owner CSV returns a sentence asking for a shorter period. A short accounting
+  file is a wrong number that looks exactly like a right one. It windows on
+  `paid_at` so it reconciles with `/v1/owner/earnings`, and it carries no
+  filenames — "Medical Results Ravi Kumar.pdf" names a person as surely as an
+  address does.
 - **Enum columns use `core.db.EnumText`.** A `Mapped[SomeEnum]` column typed as
   a bare `String` returns a plain `str` after a database round-trip. These are
   StrEnums, so `value == Enum.X` still passes and tests stay green, while
@@ -220,7 +262,7 @@ documents describing the same thing is how they drift.
 
 ## State of play
 
-**1304 tests passing, 96 routes, 11 import contracts kept, ruff clean.** Verify with:
+**1406 tests passing, 97 routes, 12 import contracts kept, ruff clean.** Verify with:
 
 ```bash
 .venv/Scripts/python -m pytest -q && .venv/Scripts/lint-imports && .venv/Scripts/python -m ruff check .
@@ -238,8 +280,9 @@ documents describing the same thing is how they drift.
 | `orders/` | **the aggregate** — payment and print tasks commit together, so "paid but never printed" is unreachable; quotes + gateway fee, wallet and gateway as two branches into one commit, expiry that releases reserved paper |
 | `wallet/` | ledger-as-record with the balance derived from it, double-spend refused by a conditional UPDATE rather than a read-check-write, `UNIQUE (wallet_id, reference)` for replayed webhooks |
 | `printing/` | print options + the one workload calculation, Document and PrintTask models, **atomic claim with `FOR UPDATE SKIP LOCKED`** and lease recovery, storage (opaque keys), PDF pipeline (Ghostscript under `-dSAFER`), task progress + paper from device-reported sheets, photo→A4 layout, retention |
-| `ops/` | audit trail (one rule, matrix-enforced) and deduplicating admin alerts |
-| `api/` | `deps`, `student/*`, `owner/*`, `refiller/kiosks`, `device/*` (incl. **the WebSocket**), **`admin/*`** — 96 routes, all in `tests/authz/matrix.py` |
+| `ops/` | audit trail (one rule, matrix-enforced) and deduplicating admin alerts that stand down when the condition clears |
+| `api/` | `deps`, `student/*`, `owner/*` (incl. the orders CSV), `refiller/kiosks`, `device/*` (incl. **the WebSocket**), **`admin/*`**, **rate limits** — 97 routes, all in `tests/authz/matrix.py` |
+| `jobs/` | the scheduler and four sweeps: order expiry, file retention, the offline-kiosk watcher, the paper watcher |
 
 ### Not built yet, in dependency order
 
@@ -247,10 +290,9 @@ documents describing the same thing is how they drift.
 2. **cutover** — agent rewrite (it must learn the socket), staging, freeze
    window
 
-Not modules, but real and unowned: nothing runs on a schedule
-(`expire_stale_orders`, `purge_expired_files`), email is logged rather than
-sent, there is no rate limiting, `/health` never touches the database, and
-there is no `deploy/`. See `HANDOFF.md`.
+Not modules, but real and still unowned: there is no `deploy/`, no
+subscription can be bought, and per-account rate limits (as opposed to
+per-address ones) do not exist. See `HANDOFF.md`.
 
 ### Blocked on the operator
 
@@ -274,5 +316,9 @@ there is no `deploy/`. See `HANDOFF.md`.
   that prevents it**
 - `docs/superpowers/specs/2026-08-15-legacy-data-audit.md` — what is actually
   wrong in the production data
+- `docs/superpowers/specs/2026-08-22-student-app-api-gap.md` — every call
+  `printvendo-web` makes, where it lands here, and what has no home on either
+  side (favourites, the paper shop, push, invoices, and three pages the
+  outgoing emails already point at)
 - `docs/superpowers/plans/` — per-sub-project plans, each with an outcome
   section listing the defects found while building it
