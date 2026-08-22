@@ -34,12 +34,18 @@ from app.modules.kiosks.onboarding import (
     move_to,
     reconcile_billing_state,
 )
-from app.modules.kiosks.paper import consume_paper, sheets_remaining
+from app.modules.kiosks.paper import (
+    consume_paper,
+    reset_paper,
+    set_paper,
+    sheets_remaining,
+)
 from app.modules.kiosks.pricing import (
     UNBOUNDED as UnboundedBand,
 )
 from app.modules.kiosks.pricing import (
     BandSource,
+    PlatformBand,
     PriceBand,
     effective_prices,
     read_pricing,
@@ -78,6 +84,7 @@ __all__ = [
     "KioskType",
     "OnboardingStage",
     "PlatformOnlyBilling",
+    "PlatformBand",
     "PriceBand",
     "UnboundedBand",
     "Scope",
@@ -110,5 +117,7 @@ __all__ = [
     "set_active",
     "set_location",
     "unassign",
+    "reset_paper",
+    "set_paper",
     "sheets_remaining",
 ]

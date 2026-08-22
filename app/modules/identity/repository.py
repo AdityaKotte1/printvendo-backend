@@ -53,6 +53,19 @@ def roles_of(db: Session, user_id: int) -> set[Role]:
     return {Role(r) for r in db.execute(stmt).scalars()}
 
 
+def anyone_holds(db: Session, role: Role) -> bool:
+    """Whether any account at all holds this role.
+
+    Deliberately counts deactivated accounts too. The question it answers is
+    "does this system already have an administrator", and a deactivated one can
+    be turned back on by whoever deactivated them -- so answering False would
+    let the command line mint a second admin around an audited route that is
+    perfectly reachable.
+    """
+    stmt = select(UserRole.user_id).where(UserRole.role == role)
+    return db.execute(stmt).first() is not None
+
+
 def grant_role(db: Session, user_id: int, role: Role) -> None:
     """Give a user a role. Granting one they already hold is a no-op."""
     if role in roles_of(db, user_id):

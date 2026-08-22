@@ -144,7 +144,7 @@ forbidden_modules =
     app.modules.orders
 
 [importlinter:contract:jobs-go-through-services]
-name = the scheduled jobs go through services, never through the ORM module
+name = jobs and the command line go through services, never through the ORM module
 type = forbidden
 # The same rule the api layer has, for the same reason: a sweep is a composition
 # root, so it may know about several contexts at once, but it must reach them
@@ -152,6 +152,7 @@ type = forbidden
 # second implementation of that module's invariants, running unattended.
 source_modules =
     app.jobs
+    app.cli
 forbidden_modules =
     app.modules.identity.models
     app.modules.kiosks.models
@@ -163,7 +164,7 @@ forbidden_modules =
 allow_indirect_imports = True
 
 [importlinter:contract:layers]
-name = jobs and api sit above modules sit above core
+name = jobs, api and the command line sit above modules sit above core
 type = layers
 # `app.jobs | app.api` is one layer holding two *independent* siblings -- the
 # pipe is what makes them independent; a colon would let them import each other
@@ -171,6 +172,6 @@ type = layers
 # neither may import the other: a route that wants a sweep run now calls the
 # same service the job calls.
 layers =
-    app.jobs | app.api
+    app.jobs | app.api | app.cli
     app.modules
     app.core
