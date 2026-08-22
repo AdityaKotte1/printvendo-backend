@@ -4,7 +4,7 @@ Read `CLAUDE.md` first — it carries the conventions and the state of play, and
 it is loaded automatically. This file carries only what CLAUDE.md does not: the
 exact point work stopped, and the traps that cost time.
 
-**Last updated: 2026-08-22, at commit `454aa27`.**
+**Last updated: 2026-08-22, at commit `ba3b162`.**
 
 Update this file at the end of a session. Delete anything that has become true
 in CLAUDE.md — two documents describing the same thing is how they drift.
@@ -14,7 +14,7 @@ in CLAUDE.md — two documents describing the same thing is how they drift.
 ## Where things stand
 
 ```
-1300 tests passing · 11 import contracts · ruff clean · 96 routes (29 admin)
+1304 tests passing · 11 import contracts · ruff clean · 96 routes (29 admin)
 ```
 
 Verify before trusting that line:
@@ -26,39 +26,68 @@ Verify before trusting that line:
 **Done:** core, identity, kiosks, payments, billing, printing, orders, wallet,
 ops, every api layer including admin, and the **device socket**.
 
-**Next, in dependency order:** migration → agent → cutover.
+**Next, in dependency order:** migration → agent → cutover. The migration's
+three blocking decisions are answered; it is waiting on a production dump, not
+on a decision.
 
 ---
 
 ## Start here
 
-**The migration** from `printit_legacy`, which is restored locally from a
-production dump. Everything a person or a machine can do now has a route; what
-is missing is the data.
+**The migration reader**, written against the legacy *schema* and tested on
+synthetic data. The three decisions that used to block it are answered; what is
+missing now is the production rows, and they arrive later.
 
-It is still blocked on three decisions listed at the end of
-`docs/superpowers/specs/2026-08-15-legacy-data-audit.md` — the ownerless SOLD
-kiosk, the ten case-duplicate accounts, and the test/duplicate kiosks. Those are
-the operator's calls, not code. **Ask for them before writing the migration**,
-because each one changes what the script does rather than merely how it logs.
+### What changed, and why it matters
 
-Two things already lean on those answers:
+**The local `printit_legacy` restore is gone.** Verified 2026-08-22: that
+database exists, as do `printhub`, `printvending` and `smartprint`, and every one
+of them has **zero tables**. Do not go looking for it, and do not trust any
+figure in the data audit — kiosk 35, the ten duplicate pairs, the ~4,000
+abandoned checkouts are all illustrative now.
 
-- `identity.repository.find_by_email` returns a **list**, so case-duplicate
-  accounts are visible in the admin console rather than silently hidden by a
-  `scalar_one_or_none`.
-- Every table carries `legacy_id`, nullable and indexed, so a number that looks
-  wrong afterwards can be traced to the row it came from.
+**The operator will hand over a fresh dump** taken while production is in
+maintenance. Ask for `pg_dump` with schema *and* data, so the plan step can
+refuse a column-type mismatch loudly instead of coercing it.
 
-**If the operator is not available**, the honest alternatives in rough order of
-value: wire a scheduler for `expire_stale_orders` and `purge_expired_files`
-(both have no caller); give `ops.raise_alert` its first callers, since the admin
-console is currently correct and empty; or send email for real, since every
-invitation and password reset is presently a log line.
+**So the schema comes from `cloud-backend/app/models/`** — the running
+production backend's own SQLAlchemy models. That is authoritative and closer to
+production than a dump would be. Build the reader against those and test the
+whole migration on a synthetic legacy database created from them inside
+`printvendo_test`. When the dump lands, the same code points at a real database.
 
-The device agent rewrite is real work and is *not* blocked — the Pi has to learn
+### The rules, already decided
+
+Recorded in full at the end of
+`docs/superpowers/specs/2026-08-15-legacy-data-audit.md`. In short:
+
+- **Kiosks are created through `create_kiosk`, never copied**, and climb the
+  onboarding ladder — so the payment gate still stands between a SOLD kiosk and
+  LIVE. Each records `legacy_id` (`ba3b162`), which is how orders and payments
+  find their kiosk. **The run fails if any legacy kiosk that took a payment is
+  unmapped**; a silently smaller revenue total is the one outcome this must not
+  have.
+- **An ownerless SOLD kiosk is created as PLATFORM** and reported.
+- **Case-colliding accounts merge onto the oldest**, balances summed, every
+  merge itemised.
+- **Test and duplicate kiosks are not a list in code.** The plan step generates
+  the candidates from the fresh dump for the operator to confirm; anything that
+  took a real payment is imported whatever it is called.
+
+### Shape
+
+**Plan, then apply.** Read, print what would be created, mapped, merged and
+quarantined with row counts and wallet/revenue totals, get approval, then apply
+in one transaction and refuse to finish if the totals disagree.
+
+### If you would rather not start there
+
+All unblocked, in rough order of value: the **agent rewrite** (the Pi must learn
 `/v1/device/ws`, treat `{"type": "wake"}` as "ask now", and keep polling as the
-fallback. Doing it before the migration is defensible.
+fallback); a **scheduler** for `expire_stale_orders` and `purge_expired_files`,
+which have no caller; **the first callers for `ops.raise_alert`**, since the
+admin console is correct and empty; or **sending email for real**, since every
+invitation and password reset is currently a log line.
 
 ---
 
@@ -106,6 +135,12 @@ channel it subscribed to -- not on which of two identical messages arrived.
 `tests/authz` now yields WebSocket routes under the pseudo-method `WS`;
 `tests/ops` imports the same `_flatten` and asks for `.methods`, which a
 WebSocket route does not have. If you add another route kind, check both.
+
+**Check that a database has tables, not just that it exists.** `printit_legacy`
+connects happily and answers queries; it simply has nothing in it. "The dump is
+restored" was true when the audit was written and had quietly stopped being
+true. `select count(*) from information_schema.tables where
+table_schema='public'` is the check that would have caught it.
 
 **A new paper tray is full, not empty.** Paper is stored as sheets *used*, so
 `used = 0` is a fresh ream. A test asserting `sheets_remaining == 0` on a new

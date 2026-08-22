@@ -84,6 +84,15 @@ Copy `.env.example` to `.env` and fill it. The app refuses to boot with a
 - **The authz matrix covers WebSocket routes too**, under the pseudo-method
   `WS`. A route with no `methods` would otherwise have been collected by
   nothing.
+- **`legacy_id` is set by the migration and by nothing else.** It is a
+  parameter of `create_kiosk`, not a field on any request schema: a route that
+  let an admin claim a legacy id by hand would let somebody attach a stranger's
+  order history to a kiosk they had just created.
+- **The migration creates through the services; it does not copy rows.** Kiosks
+  come from `create_kiosk` and climb the onboarding ladder, so every invariant
+  applies to imported data and a SOLD kiosk still cannot reach LIVE without a
+  working payment gate. Nothing learned from the old dump is hardcoded — the
+  decisions are rules applied to whatever the fresh dump contains.
 - **Refresh rotation has a 60-second grace window** (`identity/sessions.py`).
   Removing it reintroduces the old backend's "logs out frequently" bug, where
   two tabs refreshing at once signed the user out. Verified: setting
@@ -211,7 +220,7 @@ documents describing the same thing is how they drift.
 
 ## State of play
 
-**1300 tests passing, 96 routes, 11 import contracts kept, ruff clean.** Verify with:
+**1304 tests passing, 96 routes, 11 import contracts kept, ruff clean.** Verify with:
 
 ```bash
 .venv/Scripts/python -m pytest -q && .venv/Scripts/lint-imports && .venv/Scripts/python -m ruff check .
@@ -250,9 +259,13 @@ there is no `deploy/`. See `HANDOFF.md`.
   what needs it. Tests run against `fakeredis`, which speaks the same pub/sub
   protocol, so `RedisBus` itself is exercised rather than a stand-in. Real Redis
   is exercised at staging.
-- **Three data decisions** before the migration can be written — see the end of
-  `docs/superpowers/specs/2026-08-15-legacy-data-audit.md`: the ownerless SOLD
-  kiosk, the case-duplicate accounts, and the test/duplicate kiosks.
+- **A fresh production dump.** The three data decisions were answered on
+  2026-08-22 and are recorded, as rules, at the end of
+  `docs/superpowers/specs/2026-08-15-legacy-data-audit.md`. What is now missing
+  is the data: the local `printit_legacy` restore is **gone** (that database and
+  three others exist with zero tables), so the legacy *schema* comes from
+  `cloud-backend/app/models/` and the *rows* arrive as a `pg_dump` taken during a
+  maintenance window. Every figure in the audit is illustrative, not current.
 
 ### Reference documents
 
