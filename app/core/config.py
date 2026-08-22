@@ -90,6 +90,30 @@ class Settings(BaseSettings):
     MAIL_FROM_EMAIL: str = "hello@printvendo.com"
     MAIL_FROM_NAME: str = "Printvendo"
 
+    # ── the edge ────────────────────────────────────────────────────────────
+    # Off is never the default. The switch exists for a load test and for an
+    # incident where the limiter itself is the problem.
+    RATE_LIMIT_ENABLED: bool = True
+
+    # Whether `X-Forwarded-For` is evidence. True only when something we run
+    # sits in front and appends the peer it saw: with no proxy there, the header
+    # is whatever the caller typed, and every attacker gets a fresh bucket per
+    # request. Without it behind a proxy the opposite happens -- the whole
+    # internet arrives from one address and shares one bucket.
+    TRUST_PROXY_HEADERS: bool = False
+
+    @property
+    def rate_limit_store_url(self) -> str:
+        """Where hits are counted. Redis anywhere that runs more than one worker.
+
+        An in-process counter under `--workers 4` enforces four times the
+        configured number, silently. Production already requires Redis for the
+        device socket, so there is nothing new to install -- and deriving this
+        rather than adding a second setting means there is no way to configure
+        a multi-worker deployment into counting locally.
+        """
+        return "" if self.ENV == "dev" else self.REDIS_URL
+
     CORS_ORIGINS: str = ""
 
     @property

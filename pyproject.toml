@@ -13,9 +13,12 @@ dependencies = [
     "python-jose[cryptography]>=3.3",
     "passlib[bcrypt]>=1.7.4",
     "bcrypt==4.0.1",
+    # Pub/sub for the device wake, and the counter behind the rate limiter.
+    # `slowapi` used to be here and was wired to nothing; when it came to
+    # wiring it, its async storage wanted `coredis` -- a second Redis client
+    # beside this one, to count integers. See app/core/ratelimit.py.
     "redis>=5.2",
     "cryptography>=43.0",
-    "slowapi>=0.1.9",
     "google-auth>=2.35",
     # PDF structure parsing at upload time. libqpdf, so it reads the structure
     # without rendering -- milliseconds, and nothing to execute.

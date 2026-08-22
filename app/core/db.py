@@ -4,14 +4,23 @@ One Base and one metadata for the whole service: modules own their tables, but
 they share a schema and a migration history.
 """
 
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from enum import StrEnum
 from functools import lru_cache
 from typing import Any
 
-from sqlalchemy import Engine, String, TypeDecorator, create_engine
+from sqlalchemy import Engine, String, TypeDecorator, create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+
+logger = logging.getLogger(__name__)
+
+# How long a connection attempt may take before it is a failure rather than a
+# wait. Without it the driver inherits the OS TCP timeout, so a database that
+# has gone away holds a request open for minutes -- and holds the health probe
+# open with it, which turns "down" into "not answering".
+CONNECT_TIMEOUT_SECONDS = 5
 
 
 class Base(DeclarativeBase):
@@ -52,7 +61,30 @@ class EnumText(TypeDecorator):
 
 @lru_cache
 def get_engine(url: str) -> Engine:
-    return create_engine(url, pool_pre_ping=True, pool_size=10, max_overflow=20)
+    return create_engine(
+        url,
+        pool_pre_ping=True,
+        pool_size=10,
+        max_overflow=20,
+        connect_args={"connect_timeout": CONNECT_TIMEOUT_SECONDS},
+    )
+
+
+def database_is_reachable(url: str) -> bool:
+    """Whether a query can actually be run right now.
+
+    Deliberately on the engine every request uses, rather than on a connection
+    of its own: what a probe has to answer is "can this process serve traffic",
+    and a fresh connection succeeding while the pool is exhausted or misconfigured
+    would answer a different and less useful question.
+    """
+    try:
+        with get_engine(url).connect() as connection:
+            connection.execute(text("select 1"))
+        return True
+    except Exception:  # noqa: BLE001 - a probe reports, it does not raise
+        logger.warning("health check could not reach the database", exc_info=True)
+        return False
 
 
 @lru_cache

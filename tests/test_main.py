@@ -14,16 +14,46 @@ SETTINGS = Settings(
 )
 
 
-def test_health_returns_ok():
-    client = TestClient(create_app(SETTINGS))
+def _reachable(postgres_url: str) -> Settings:
+    """Settings pointed at the database the tests actually run against."""
+    return SETTINGS.model_copy(update={"DATABASE_URL": postgres_url})
+
+
+def test_health_returns_ok_when_the_database_answers(postgres_url):
+    client = TestClient(create_app(_reachable(postgres_url)))
+
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+    assert response.json()["database"] == "ok"
 
 
-def test_health_reports_version_and_env():
+def test_health_reports_version_and_env(postgres_url):
+    body = TestClient(create_app(_reachable(postgres_url))).get("/health").json()
+
+    assert body["version"]
+    assert body["env"] == "dev"
+
+
+def test_health_is_unhealthy_when_the_database_is_not_there():
+    """A probe that answers 200 while nothing works is worse than no probe.
+
+    SETTINGS names a database that does not exist, which is the whole point:
+    this is the case the old `/health` could not tell apart from a working one,
+    so a load balancer kept sending traffic to a process that could not serve a
+    single request.
+    """
     client = TestClient(create_app(SETTINGS))
-    body = client.get("/health").json()
+
+    response = client.get("/health")
+    assert response.status_code == 503
+    assert response.json()["status"] == "degraded"
+    assert response.json()["database"] == "unreachable"
+
+
+def test_an_unhealthy_probe_still_says_which_version_is_unhealthy(postgres_url):
+    body = TestClient(create_app(SETTINGS)).get("/health").json()
+
     assert body["version"]
     assert body["env"] == "dev"
 

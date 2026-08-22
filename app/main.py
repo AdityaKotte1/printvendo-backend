@@ -18,8 +18,11 @@ import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
+from app.api.ratelimit import install_rate_limiting
 from app.core.config import Settings, get_settings
+from app.core.db import database_is_reachable
 from app.core.errors import install_error_handlers
 
 VERSION = "0.1.0"
@@ -53,6 +56,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="PrintVendo API", version=VERSION)
     app.state.settings = settings
+
+    # Order matters, and reads backwards: the last middleware added is the
+    # outermost. Rate limiting must sit *inside* CORS so that a 429 still
+    # carries the headers a browser needs to read it -- see
+    # install_rate_limiting.
+    install_rate_limiting(app, settings)
 
     app.add_middleware(
         CORSMiddleware,
@@ -108,7 +117,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(webhooks.router)
 
     @app.get("/health", tags=["meta"])
-    def health() -> dict[str, str]:
-        return {"status": "ok", "version": VERSION, "env": settings.ENV}
+    def health() -> JSONResponse:
+        """Whether this process can serve a request, not whether it is running.
+
+        A probe that answers 200 from the web framework alone is answering the
+        one question nobody is asking: uvicorn is up. It stayed green through
+        every database outage the old backend had, so the load balancer kept
+        sending traffic to a process that could not serve a single request.
+
+        503 rather than 200-with-a-flag, because the thing reading this is a
+        load balancer and it reads the status code.
+        """
+        reachable = database_is_reachable(settings.DATABASE_URL)
+        return JSONResponse(
+            status_code=200 if reachable else 503,
+            content={
+                "status": "ok" if reachable else "degraded",
+                "database": "ok" if reachable else "unreachable",
+                "version": VERSION,
+                "env": settings.ENV,
+            },
+        )
 
     return app
