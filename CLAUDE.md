@@ -141,6 +141,31 @@ Copy `.env.example` to `.env` and fill it. The app refuses to boot with a
   wired at the composition root. Enforced by the
   `payments-does-not-know-what-it-paid-for` contract rather than by the sentence
   in the module docstring that used to be the only thing holding it.
+- **A proof of account ownership is bytes from an authenticated route.** Never a
+  URL. The old admin dashboard built `API_BASE + '/storage/...'` behind an
+  `onerror` handler, so a proof that failed to load looked exactly like one
+  nobody had uploaded and bank-detail changes were approved unseen. A request
+  with no proof is a 404 saying so. Inline rendering is limited to an allowlist
+  of image and PDF types; anything else downloads, because an SVG served inline
+  from the API's origin is stored XSS uploaded by the person under review.
+- **Admin is a wider scope, never a bypass.** `/v1/admin/kiosks/{id}/stage`
+  covers the whole onboarding ladder where the owner's route covers two rungs --
+  but it is the same `move_to`, so CONFIGURED still cannot be skipped and a SOLD
+  kiosk whose owner cannot collect still cannot go LIVE.
+- **An admin cannot disarm themselves.** Revoking your own admin role or
+  deactivating your own account is refused; another admin may do both. There is
+  no second surface that could grant either back.
+- **Platform revenue has four buckets and no total.** Ours, the owners', 
+  subscription income, and student balances we merely hold are four kinds of
+  money; a sum across them is true of nothing, and counting top-ups as takings
+  books a liability as income. How much of our bucket is owed onward to owners
+  is deliberately unanswered here -- it is a question about kiosk ownership, and
+  payments does not know.
+- **A trial is a money-routing lever.** A subscription inside its trial is in
+  force, which is half of what the payment gate requires, so granting one turns
+  a shop's takings on. A second grant extends the first rather than adding a
+  row: two live trials would make "when does this stop being free" a question
+  with two answers, and `active_subscription` takes the longest-running one.
 - **Enum columns use `core.db.EnumText`.** A `Mapped[SomeEnum]` column typed as
   a bare `String` returns a plain `str` after a database round-trip. These are
   StrEnums, so `value == Enum.X` still passes and tests stay green, while
@@ -173,7 +198,7 @@ documents describing the same thing is how they drift.
 
 ## State of play
 
-**1102 tests passing, 11 import contracts kept, ruff clean.** Verify with:
+**1280 tests passing, 95 routes, 11 import contracts kept, ruff clean.** Verify with:
 
 ```bash
 .venv/Scripts/python -m pytest -q && .venv/Scripts/lint-imports && .venv/Scripts/python -m ruff check .
@@ -191,15 +216,19 @@ documents describing the same thing is how they drift.
 | `orders/` | **the aggregate** — payment and print tasks commit together, so "paid but never printed" is unreachable; quotes + gateway fee, wallet and gateway as two branches into one commit, expiry that releases reserved paper |
 | `wallet/` | ledger-as-record with the balance derived from it, double-spend refused by a conditional UPDATE rather than a read-check-write, `UNIQUE (wallet_id, reference)` for replayed webhooks |
 | `printing/` | print options + the one workload calculation, Document and PrintTask models, **atomic claim with `FOR UPDATE SKIP LOCKED`** and lease recovery, storage (opaque keys), PDF pipeline (Ghostscript under `-dSAFER`), task progress + paper from device-reported sheets, photo→A4 layout, retention |
-| `api/` | `deps`, `student/auth|staff|documents`, `owner/kiosks`, `refiller/kiosks`, `device/agent|tasks` — 45 routes, all in `tests/authz/matrix.py` |
+| `ops/` | audit trail (one rule, matrix-enforced) and deduplicating admin alerts |
+| `api/` | `deps`, `student/*`, `owner/*`, `refiller/kiosks`, `device/*`, **`admin/*`** — 95 routes, all in `tests/authz/matrix.py` |
 
 ### Not built yet, in dependency order
 
-1. **ops** — admin alerts, audit, analytics, exports
-2. **admin API layer** — `/v1/admin/*`
-3. **device WebSocket hub** — needs Redis, deferred to staging by the operator
-4. **migration** from `printit_legacy` (restored locally from a prod dump)
-5. **cutover** — agent rewrite, staging, freeze window
+1. **device WebSocket hub** — needs Redis, deferred to staging by the operator
+2. **migration** from `printit_legacy` (restored locally from a prod dump)
+3. **cutover** — agent rewrite, staging, freeze window
+
+Not modules, but real and unowned: nothing runs on a schedule
+(`expire_stale_orders`, `purge_expired_files`), email is logged rather than
+sent, there is no rate limiting, `/health` never touches the database, and
+there is no `deploy/`. See `HANDOFF.md`.
 
 ### Blocked on the operator
 

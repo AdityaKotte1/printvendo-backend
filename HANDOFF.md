@@ -4,7 +4,7 @@ Read `CLAUDE.md` first — it carries the conventions and the state of play, and
 it is loaded automatically. This file carries only what CLAUDE.md does not: the
 exact point work stopped, and the traps that cost time.
 
-**Last updated: 2026-08-21, at commit `41520d5`.**
+**Last updated: 2026-08-22, at commit `677d95a`.**
 
 Update this file at the end of a session. Delete anything that has become true
 in CLAUDE.md — two documents describing the same thing is how they drift.
@@ -14,7 +14,7 @@ in CLAUDE.md — two documents describing the same thing is how they drift.
 ## Where things stand
 
 ```
-1102 tests passing · 11 import contracts · ruff clean · 61 routes
+1280 tests passing · 11 import contracts · ruff clean · 95 routes (29 admin)
 ```
 
 Verify before trusting that line:
@@ -23,73 +23,76 @@ Verify before trusting that line:
 .venv/Scripts/python -m pytest -q && .venv/Scripts/lint-imports && .venv/Scripts/python -m ruff check .
 ```
 
-**Done:** core, identity, kiosks, payments (incl. the real Razorpay HTTP client,
-refunds, webhook), billing, printing, orders, wallet, ops, student-api,
-owner-api.
+**Done:** core, identity, kiosks, payments, billing, printing, orders, wallet,
+ops, and the student, owner, refiller, device and **admin** api layers.
 
-**Next, in dependency order:** admin-api → device-ws → migration → agent →
-cutover.
+**Next, in dependency order:** device-ws → migration → agent → cutover.
 
 ---
 
 ## Start here
 
-**`admin-api` (`/v1/admin/*`).** Nothing else is blocked on anything else.
+**`device-ws`.** Everything a person can do now has a route; what is missing is
+the machine half, and then the data.
 
-One loop is currently half-built and that is the first thing to close:
+The device API works today by polling (`POST /v1/device/tasks/next`), so this is
+about latency and about lifting the one-worker constraint, not about correctness.
+The registry lives in Redis rather than a per-process dict — that is the whole
+reason the Dockerfile can honestly say `--workers 4`, which it currently claims
+on a registry that does not exist.
 
-- An owner can submit a payment-key change request
-  (`POST /v1/owner/payment-config/change-request`, built and tested).
-- `payments.configs.review_change` exists and is tested.
-- **Nothing can call it.** There is no admin route, so an owner who needs to
-  change where their money goes submits a request that no one can approve.
+- Redis is **not installed locally**, and the operator confirmed that is a
+  production concern rather than a local one. Build against `fakeredis`; real
+  Redis is exercised at staging.
+- The claim path is already atomic (`FOR UPDATE SKIP LOCKED`) and lease
+  recovery already exists, so a socket that drops mid-job is a solved problem.
+  Do not reimplement either behind the hub.
 
-Also unread without an admin surface: the `ops` audit trail and `AdminAlert`
-list, both built last session and currently written but never displayed.
-
-The change-request proof file needs an authenticated admin download route.
-It is stored under `StorageArea.PROOF` and must **never** be served as a static
-URL — the old admin dashboard built `API_BASE + '/storage/...'`, which 404s
-silently behind an `onerror` handler, so admins were approving these having
-never seen the proof.
+**Then the migration**, which is still blocked on three data decisions listed at
+the end of `docs/superpowers/specs/2026-08-15-legacy-data-audit.md`: the
+ownerless SOLD kiosk, the ten case-duplicate accounts, and the test/duplicate
+kiosks. `identity.repository.find_by_email` returns a **list** specifically so
+those duplicates are visible in the admin console rather than hidden.
 
 ---
 
 ## Traps that cost time in this session
 
-Each of these produced a green test that proved nothing, or an hour of
-debugging. They are not hypothetical.
+**`pathlib.read_text()` defaults to cp1252 on this machine.** Editing a file
+that contains box-drawing characters — `matrix.py`, `audit_matrix.py`, most
+module docstrings — silently fails to match, and a naive round-trip risks
+mangling them. Always pass `encoding="utf-8"` to both `read_text` and
+`write_text`.
 
-**Assert on the error message, not just the status.** Two price-band tests
-passed against a working band while proving nothing: the request used
-`price_bw_single` where the schema says `bw_single`, so the payload was empty
-and the 400 was "give at least one price to set". A second draft then tripped a
-different rule again. A 400 for the wrong reason must fail.
+**A `+` in a query string is a space.** `client.get(f"...?since={iso}")` with an
+offset-aware datetime produced a 422, and the test failed on a `KeyError` in the
+response body rather than on anything real. Pass `params={...}` and let the
+client encode it.
 
-**Check the real function signature before writing the test.** `effective_prices`
-returns a dict, not an object. `document_for_user` raises `NotFound` rather than
-returning `None`. `Subscription` has `expires_at`, not `current_period_end`.
-Guessing cost three round trips each time.
+**Bash heredocs choke on some of this prose.** Writing a test file with `cat
+<<'EOF'` failed with "unexpected EOF"; the Write tool is the reliable path for
+anything with apostrophes and unicode in it.
 
-**There are no ORM relationships across modules.** `Order` has no `.kiosk` and
-`OrderItem` has no `.document` — a relationship is an import of another
-context's table, which the import contracts forbid. Use `orders.views`, which
-resolves public ids in two batched queries.
+**A test can pass before the route exists.** `test_the_queue_never_carries_a
+_storage_path` asserted `"proofs/" not in body` and passed against a 404. It
+only became a real check once the route was written. Assert something the empty
+case cannot satisfy, or run it once with the implementation in place.
 
-**Querying autoflushes.** A test asserting "this has not been written yet"
-changes the answer by asking. Test the property that matters instead — whether
-it survives a rollback — with `db.begin_nested()`.
+**A surviving mutation may mean the test is aimed at the wrong property.**
+Removing `revoke_all` from account deactivation broke nothing, because
+`rotate_refresh` already refuses an inactive user — so a refresh attempted while
+the account is off fails either way. The property the revocation is actually
+load-bearing for is that a token taken *before* deactivation is still dead
+*after* reactivation. That test now exists and was confirmed to fail without the
+revocation.
 
-**`git checkout -- a b` fails atomically.** If one path is untracked, neither
-file is restored, so a mutation you thought you reverted is still applied.
-Prefer reverting mutations with the same script that applied them.
+**Check the shape a route returns before asserting on it.** Two billing tests
+read `body["on_trial"]` where the response nests it under `subscription`. Same
+class of mistake as last session's `effective_prices` returns-a-dict.
 
-**A mutation that survives may be pointing at a real bug.** Deleting the
-webhook's duplicate-refund lookup broke no test — because reaching the fallback
-meant an INSERT the unique index refuses, and `refund()` caught that
-`IntegrityError` from a bare `flush()`, poisoning the caller's whole
-transaction. The fix was a savepoint. Do not simply delete a guard that a
-mutation says is redundant; find out why it looked redundant.
+**A new paper tray is full, not empty.** Paper is stored as sheets *used*, so
+`used = 0` is a fresh ream. A test asserting `sheets_remaining == 0` on a new
+kiosk is asserting the opposite of the intended behaviour.
 
 ---
 
@@ -99,8 +102,8 @@ mutation says is redundant; find out why it looked redundant.
 
 1. **Mutation-test anything that matters.** After a security or money rule
    lands, deliberately break it, confirm the *intended* test fails, restore.
-   Several "passing" checks in this build turned out to be inspecting an empty
-   set. A guardrail never seen to fail is not known to work.
+   Nine mutations this session; eight failed the right test, and the one that
+   survived found a missing test rather than a redundant guard.
 2. **Say what is not done.** Partial work is reported as partial.
 
 Two mechanisms fail the build if you add a route and do not think:
@@ -109,7 +112,7 @@ Two mechanisms fail the build if you add a route and do not think:
 - `tests/ops/audit_matrix.py` — whether it leaves an audit trail, `AUDITED` or
   `EXEMPT` with a named reason.
 
-Both caught real mistakes the first time they ran. Do not work around them.
+Both fired on every admin router added this session. Do not work around them.
 
 ---
 
@@ -130,34 +133,32 @@ Alembic reads `DATABASE_URL` from the **environment**, not from `.env`:
 export DATABASE_URL=$(grep -E "^DATABASE_URL=" .env | cut -d= -f2-)
 ```
 
-Migrations are hand-written when autogenerate would be wrong — it wanted to
-drop-and-add for a column rename, which discards every existing row's value.
-
----
-
-## Open decisions, not open questions
-
-Blocked on the operator, not on code:
-
-- **Redis** — not installed. Only needed for the device WebSocket hub so
-  production can run more than one worker. The device API works by polling
-  without it. Deferred to staging.
-- **Three data decisions** before the migration can be written: the ownerless
-  SOLD kiosk, the ten case-duplicate accounts, the test/duplicate kiosks. See
-  the end of `docs/superpowers/specs/2026-08-15-legacy-data-audit.md`.
+Migrations are hand-written when autogenerate would be wrong. The most recent
+one (`9a1c4d77e2b1`, the change-request public id) adds a column nullable,
+backfills row by row — each id must be distinct, so one UPDATE with one
+generated value would violate the unique index it is about to get — and only
+then sets NOT NULL.
 
 ---
 
 ## Known gaps that are not modules
 
-These are real and currently unowned. None blocks `admin-api`.
+Real, currently unowned, and none of them blocks `device-ws`.
 
 - **Nothing runs on a schedule.** `expire_stale_orders` and
   `purge_expired_files` have no caller. Unpaid orders hold reserved paper
   forever and `FILE_RETENTION_DAYS = 7` is a promise nothing keeps.
 - **Email is logged, not sent.** `LoggingNotifier` is wired; `BREVO_API_KEY` is
   read by nothing. In prod the app logger sits at WARNING, so password reset is
-  effectively inert.
+  effectively inert — and now so is every staff and owner invitation, including
+  the one that assigns a kiosk to the shop that bought it.
+- **Nothing raises an alert yet.** `ops.raise_alert` has an admin surface to be
+  read from and no caller: no kiosk-offline detector, no low-paper watcher, no
+  unsettled-payment sweep. The console will be correct and empty.
+- **A subscription cannot be bought.** An admin can grant a trial and set terms,
+  and `quote_subscription` prices a renewal, but there is no purchase route —
+  `WebhookSettlement.settle_subscription` logs an error precisely because
+  nothing can reach it. Owners are currently on trials or nothing.
 - **No rate limiting.** `slowapi` is a dependency and is wired to nothing.
 - **`/health` never touches the database.**
 - **The Dockerfile claims a Redis registry that does not exist**, and runs
@@ -181,7 +182,7 @@ first.
 |---|---|---|
 | student | `printvendo.com` | exists, targets the legacy API |
 | owner | `owner.printvendo.com` | unfinished, targets the legacy API |
-| admin | `admin.printvendo.com` | does not exist |
+| admin | `admin.printvendo.com` | does not exist — now has 29 routes waiting |
 | refiller | `refiller.printvendo.com` | exists; 3 endpoints to rewire |
 
 **Pointing them at the new backend is a rewrite, not a config change.** Both
