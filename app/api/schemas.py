@@ -238,6 +238,13 @@ class StudentKioskResponse(BaseModel):
 
     id: str
     name: str
+    # Where the shop is. The app sorts by distance and prints how far away each
+    # one is; without these the picker is an unordered list of names and the
+    # geolocation permission it asks for buys the student nothing. A shop's
+    # address is public, unlike everything else about it that is missing here.
+    latitude: float | None
+    longitude: float | None
+    location_description: str | None
     accepts_wallet: bool
     is_out_of_paper: bool
     sheets_remaining: int

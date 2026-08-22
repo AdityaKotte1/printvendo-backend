@@ -53,6 +53,9 @@ def _as_response(db: Session, kiosk: Kiosk) -> StudentKioskResponse:
     return StudentKioskResponse(
         id=kiosk.public_id,
         name=kiosk.name,
+        latitude=kiosk.latitude,
+        longitude=kiosk.longitude,
+        location_description=kiosk.location_description,
         accepts_wallet=kiosk.accepts_wallet,
         # Derived from the tray rather than carried as a flag, so it cannot
         # disagree with the number printed next to it.

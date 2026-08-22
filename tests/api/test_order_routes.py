@@ -159,6 +159,33 @@ def test_a_student_can_see_the_shops_that_can_print(client, auth, kiosk):
     assert listed[0]["price_bw_single"] == "2.00"
 
 
+def test_a_shop_says_where_it_is(client, auth, kiosk, db_session):
+    """The student app sorts shops by distance and prints how far each one is.
+
+    Without coordinates the shop picker is an unordered list of names, and the
+    geolocation permission it asks for buys the student nothing.
+    """
+    kiosk.latitude = 12.9716
+    kiosk.longitude = 77.5946
+    kiosk.location_description = "Gate 3, opposite the canteen"
+    db_session.flush()
+
+    body = client.get("/v1/app/kiosks", headers=auth).json()[0]
+
+    assert body["latitude"] == 12.9716
+    assert body["longitude"] == 77.5946
+    assert body["location_description"] == "Gate 3, opposite the canteen"
+
+
+def test_a_shop_whose_location_nobody_recorded_is_still_listed(client, auth, kiosk):
+    """Null rather than absent, and certainly rather than hidden: a shop with no
+    coordinates still prints, and the app can fall back to its name."""
+    body = client.get("/v1/app/kiosks", headers=auth).json()[0]
+
+    assert body["latitude"] is None
+    assert body["location_description"] is None
+
+
 def test_the_kiosk_list_says_nothing_about_who_owns_a_shop(client, auth, kiosk):
     """A student has no business knowing which shops share an owner. The
     response type has no field for it, so it cannot leak by accident."""
@@ -168,6 +195,9 @@ def test_the_kiosk_list_says_nothing_about_who_owns_a_shop(client, auth, kiosk):
     assert set(body) == {
         "id",
         "name",
+        "latitude",
+        "longitude",
+        "location_description",
         "accepts_wallet",
         "is_out_of_paper",
         "sheets_remaining",
