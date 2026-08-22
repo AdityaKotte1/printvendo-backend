@@ -18,7 +18,7 @@ from app.core.config import Settings
 from app.core.crypto import SecretBox
 from app.core.db import get_session_factory
 from app.core.errors import Forbidden, Unauthorized
-from app.core.notifier import LoggingNotifier, Notifier
+from app.core.notifier import BrevoNotifier, LoggingNotifier, Notifier
 from app.core.security import TokenError, TokenType, decode_token
 from app.modules.billing import price_band_for
 from app.modules.identity import User
@@ -36,6 +36,7 @@ from app.modules.kiosks import (
     consume_paper,
     kiosk_scope,
 )
+from app.modules.ops import AlertSeverity, raise_alert
 from app.modules.orders import apply_payment_refund, settle_paid_order
 from app.modules.payments import (
     HttpRazorpay,
@@ -88,14 +89,50 @@ def get_db(
         session.close()
 
 
-def get_notifier() -> Notifier:
+def get_notifier(
+    settings: Annotated[Settings, Depends(get_settings_from_app)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Notifier:
     """How out-of-band messages leave the system.
 
-    Overridden in tests, and replaced by a real provider when the ops work
-    lands. Defined here rather than constructed inside a handler so both
-    substitutions are a one-line dependency override.
+    Brevo when a key is configured, the logging one otherwise -- so a developer
+    with no key still completes a verification flow by reading the log, and
+    production does not quietly do the same thing while believing it sends mail.
+
+    A failed send raises an admin alert. `BrevoNotifier` cannot do that itself:
+    core may not import a bounded context. This is the composition root, which
+    can, and an invitation that never arrived is exactly the kind of silent
+    failure the alerts table exists for -- a shop waits for an email nobody
+    knows was lost.
     """
-    return LoggingNotifier()
+    if not settings.BREVO_API_KEY.strip():
+        return LoggingNotifier()
+
+    def report(kind: str, email: str) -> None:
+        # Deduplicated on the kind alone rather than on the address: when the
+        # provider is down every send fails, and one alert saying "email is not
+        # going out" is what an operator needs. A thousand rows naming a
+        # thousand recipients is the wall of identical notifications that made
+        # the old backend's console unreadable.
+        raise_alert(
+            db,
+            kind="email.send.failed",
+            severity=AlertSeverity.CRITICAL,
+            summary=(
+                "Email is not being delivered. Invitations and password "
+                "resets are not arriving."
+            ),
+            dedupe_key="email.send.failed",
+            detail={"last_failure": kind},
+        )
+
+    return BrevoNotifier(
+        api_key=settings.BREVO_API_KEY,
+        app_base_url=settings.APP_BASE_URL,
+        sender_email=settings.MAIL_FROM_EMAIL,
+        sender_name=settings.MAIL_FROM_NAME,
+        on_failure=report,
+    )
 
 
 def _bearer_token(request: Request) -> str:

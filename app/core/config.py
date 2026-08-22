@@ -79,6 +79,17 @@ class Settings(BaseSettings):
     # never settle with no error anyone sees.
     PUBLIC_BASE_URL: str = "https://api.printvendo.com"
 
+    # Where a person lands when they click a link in an email. The *app*, never
+    # this API: a verification URL on api.printvendo.com puts somebody on a page
+    # of JSON. The accept-invite and reset flows all live on the student app,
+    # which is why one setting covers all three.
+    APP_BASE_URL: str = "https://printvendo.com"
+
+    # Who the email is from. A no-reply address that bounces is worse than none:
+    # somebody who replies to an invitation deserves to reach a person.
+    MAIL_FROM_EMAIL: str = "hello@printvendo.com"
+    MAIL_FROM_NAME: str = "Printvendo"
+
     CORS_ORIGINS: str = ""
 
     @property
