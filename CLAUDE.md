@@ -69,8 +69,21 @@ Copy `.env.example` to `.env` and fill it. The app refuses to boot with a
   `uvicorn app.main:create_app --factory`.
 - **`migrations/script.py.mako` is modernised** so generated revisions are
   ruff-clean. Do not restore Alembic's stock template.
-- **Workers may exceed 1.** The device WebSocket registry will live in Redis, not
-  a per-process dict — the constraint the old backend could never lift.
+- **Workers may exceed 1.** The device WebSocket hub routes through Redis
+  pub/sub, not a per-process dict — the constraint the old backend could never
+  lift. `app/core/bus.py`.
+- **The socket carries a wake, never work.** "Something is queued" goes down the
+  wire; the device then claims over the ordinary HTTP path, which is one
+  `FOR UPDATE SKIP LOCKED` statement. Sending the task itself would be a second
+  implementation of claiming, and a reconnect overlapping a publish could hand
+  one job to two devices. Polling remains the fallback and still works.
+- **A wake is marked where work is created and sent after the commit.**
+  `enqueue_task` calls `mark_for_wake`; `get_db` flushes once the transaction
+  has committed. No route sends one, so no route can forget — and a device woken
+  before the commit would ask, see nothing, and have spent its notification.
+- **The authz matrix covers WebSocket routes too**, under the pseudo-method
+  `WS`. A route with no `methods` would otherwise have been collected by
+  nothing.
 - **Refresh rotation has a 60-second grace window** (`identity/sessions.py`).
   Removing it reintroduces the old backend's "logs out frequently" bug, where
   two tabs refreshing at once signed the user out. Verified: setting
@@ -198,7 +211,7 @@ documents describing the same thing is how they drift.
 
 ## State of play
 
-**1280 tests passing, 95 routes, 11 import contracts kept, ruff clean.** Verify with:
+**1300 tests passing, 96 routes, 11 import contracts kept, ruff clean.** Verify with:
 
 ```bash
 .venv/Scripts/python -m pytest -q && .venv/Scripts/lint-imports && .venv/Scripts/python -m ruff check .
@@ -217,13 +230,13 @@ documents describing the same thing is how they drift.
 | `wallet/` | ledger-as-record with the balance derived from it, double-spend refused by a conditional UPDATE rather than a read-check-write, `UNIQUE (wallet_id, reference)` for replayed webhooks |
 | `printing/` | print options + the one workload calculation, Document and PrintTask models, **atomic claim with `FOR UPDATE SKIP LOCKED`** and lease recovery, storage (opaque keys), PDF pipeline (Ghostscript under `-dSAFER`), task progress + paper from device-reported sheets, photo→A4 layout, retention |
 | `ops/` | audit trail (one rule, matrix-enforced) and deduplicating admin alerts |
-| `api/` | `deps`, `student/*`, `owner/*`, `refiller/kiosks`, `device/*`, **`admin/*`** — 95 routes, all in `tests/authz/matrix.py` |
+| `api/` | `deps`, `student/*`, `owner/*`, `refiller/kiosks`, `device/*` (incl. **the WebSocket**), **`admin/*`** — 96 routes, all in `tests/authz/matrix.py` |
 
 ### Not built yet, in dependency order
 
-1. **device WebSocket hub** — needs Redis, deferred to staging by the operator
-2. **migration** from `printit_legacy` (restored locally from a prod dump)
-3. **cutover** — agent rewrite, staging, freeze window
+1. **migration** from `printit_legacy` (restored locally from a prod dump)
+2. **cutover** — agent rewrite (it must learn the socket), staging, freeze
+   window
 
 Not modules, but real and unowned: nothing runs on a schedule
 (`expire_stale_orders`, `purge_expired_files`), email is logged rather than
@@ -233,9 +246,10 @@ there is no `deploy/`. See `HANDOFF.md`.
 ### Blocked on the operator
 
 - **Redis** — not installed. Confirmed by the operator as a production concern,
-  not a local one. It is only needed for the device WebSocket hub so production
-  can run >1 worker; the device API works without it by polling. Tests will use
-  `fakeredis`; real Redis is exercised at staging.
+  not a local one. The device API works without it by polling; the socket is
+  what needs it. Tests run against `fakeredis`, which speaks the same pub/sub
+  protocol, so `RedisBus` itself is exercised rather than a stand-in. Real Redis
+  is exercised at staging.
 - **Three data decisions** before the migration can be written — see the end of
   `docs/superpowers/specs/2026-08-15-legacy-data-audit.md`: the ownerless SOLD
   kiosk, the case-duplicate accounts, and the test/duplicate kiosks.

@@ -4,7 +4,7 @@ Read `CLAUDE.md` first — it carries the conventions and the state of play, and
 it is loaded automatically. This file carries only what CLAUDE.md does not: the
 exact point work stopped, and the traps that cost time.
 
-**Last updated: 2026-08-22, at commit `677d95a`.**
+**Last updated: 2026-08-22, at commit `454aa27`.**
 
 Update this file at the end of a session. Delete anything that has become true
 in CLAUDE.md — two documents describing the same thing is how they drift.
@@ -14,7 +14,7 @@ in CLAUDE.md — two documents describing the same thing is how they drift.
 ## Where things stand
 
 ```
-1280 tests passing · 11 import contracts · ruff clean · 95 routes (29 admin)
+1300 tests passing · 11 import contracts · ruff clean · 96 routes (29 admin)
 ```
 
 Verify before trusting that line:
@@ -24,35 +24,41 @@ Verify before trusting that line:
 ```
 
 **Done:** core, identity, kiosks, payments, billing, printing, orders, wallet,
-ops, and the student, owner, refiller, device and **admin** api layers.
+ops, every api layer including admin, and the **device socket**.
 
-**Next, in dependency order:** device-ws → migration → agent → cutover.
+**Next, in dependency order:** migration → agent → cutover.
 
 ---
 
 ## Start here
 
-**`device-ws`.** Everything a person can do now has a route; what is missing is
-the machine half, and then the data.
+**The migration** from `printit_legacy`, which is restored locally from a
+production dump. Everything a person or a machine can do now has a route; what
+is missing is the data.
 
-The device API works today by polling (`POST /v1/device/tasks/next`), so this is
-about latency and about lifting the one-worker constraint, not about correctness.
-The registry lives in Redis rather than a per-process dict — that is the whole
-reason the Dockerfile can honestly say `--workers 4`, which it currently claims
-on a registry that does not exist.
+It is still blocked on three decisions listed at the end of
+`docs/superpowers/specs/2026-08-15-legacy-data-audit.md` — the ownerless SOLD
+kiosk, the ten case-duplicate accounts, and the test/duplicate kiosks. Those are
+the operator's calls, not code. **Ask for them before writing the migration**,
+because each one changes what the script does rather than merely how it logs.
 
-- Redis is **not installed locally**, and the operator confirmed that is a
-  production concern rather than a local one. Build against `fakeredis`; real
-  Redis is exercised at staging.
-- The claim path is already atomic (`FOR UPDATE SKIP LOCKED`) and lease
-  recovery already exists, so a socket that drops mid-job is a solved problem.
-  Do not reimplement either behind the hub.
+Two things already lean on those answers:
 
-**Then the migration**, which is still blocked on three data decisions listed at
-the end of `docs/superpowers/specs/2026-08-15-legacy-data-audit.md`: the
-ownerless SOLD kiosk, the ten case-duplicate accounts, and the test/duplicate
-kiosks. `identity.repository.find_by_email` returns a **list** specifically so
-those duplicates are visible in the admin console rather than hidden.
+- `identity.repository.find_by_email` returns a **list**, so case-duplicate
+  accounts are visible in the admin console rather than silently hidden by a
+  `scalar_one_or_none`.
+- Every table carries `legacy_id`, nullable and indexed, so a number that looks
+  wrong afterwards can be traced to the row it came from.
+
+**If the operator is not available**, the honest alternatives in rough order of
+value: wire a scheduler for `expire_stale_orders` and `purge_expired_files`
+(both have no caller); give `ops.raise_alert` its first callers, since the admin
+console is currently correct and empty; or send email for real, since every
+invitation and password reset is presently a log line.
+
+The device agent rewrite is real work and is *not* blocked — the Pi has to learn
+`/v1/device/ws`, treat `{"type": "wake"}` as "ask now", and keep polling as the
+fallback. Doing it before the migration is defensible.
 
 ---
 
@@ -90,6 +96,17 @@ revocation.
 read `body["on_trial"]` where the response nests it under `subscription`. Same
 class of mistake as last session's `effective_prices` returns-a-dict.
 
+**A test can be undisprovable rather than merely weak.** A socket test
+published one kiosk's wake and expected another's message; it could not fail,
+because every wake reads `{"type": "wake"}` and the wrong one is
+indistinguishable from the right one. Assert on what the code *chose* -- which
+channel it subscribed to -- not on which of two identical messages arrived.
+
+**Two harnesses collect routes, and they disagree about shape.**
+`tests/authz` now yields WebSocket routes under the pseudo-method `WS`;
+`tests/ops` imports the same `_flatten` and asks for `.methods`, which a
+WebSocket route does not have. If you add another route kind, check both.
+
 **A new paper tray is full, not empty.** Paper is stored as sheets *used*, so
 `used = 0` is a fresh ream. A test asserting `sheets_remaining == 0` on a new
 kiosk is asserting the opposite of the intended behaviour.
@@ -102,8 +119,9 @@ kiosk is asserting the opposite of the intended behaviour.
 
 1. **Mutation-test anything that matters.** After a security or money rule
    lands, deliberately break it, confirm the *intended* test fails, restore.
-   Nine mutations this session; eight failed the right test, and the one that
-   survived found a missing test rather than a redundant guard.
+   Twelve mutations this session. Ten failed the intended test; one found a
+   missing test rather than a redundant guard, and one found a test of mine
+   that could not have failed.
 2. **Say what is not done.** Partial work is reported as partial.
 
 Two mechanisms fail the build if you add a route and do not think:
@@ -112,7 +130,9 @@ Two mechanisms fail the build if you add a route and do not think:
 - `tests/ops/audit_matrix.py` — whether it leaves an audit trail, `AUDITED` or
   `EXEMPT` with a named reason.
 
-Both fired on every admin router added this session. Do not work around them.
+Both fired on every router added this session, and `tests/authz` had to be
+taught to see WebSocket routes before it could fire on the last one. Do not work
+around them.
 
 ---
 
@@ -143,7 +163,7 @@ then sets NOT NULL.
 
 ## Known gaps that are not modules
 
-Real, currently unowned, and none of them blocks `device-ws`.
+Real, currently unowned, and none of them blocks the migration.
 
 - **Nothing runs on a schedule.** `expire_stale_orders` and
   `purge_expired_files` have no caller. Unpaid orders hold reserved paper
@@ -161,8 +181,10 @@ Real, currently unowned, and none of them blocks `device-ws`.
   nothing can reach it. Owners are currently on trials or nothing.
 - **No rate limiting.** `slowapi` is a dependency and is wired to nothing.
 - **`/health` never touches the database.**
-- **The Dockerfile claims a Redis registry that does not exist**, and runs
-  `--workers 4` on that basis. It happens to work because devices poll.
+- **Redis is now genuinely required in production**, not merely claimed by the
+  Dockerfile: `--workers 4` is correct only because the wake goes through
+  pub/sub. Without Redis the socket degrades to nothing and devices poll, which
+  is the pre-socket behaviour and still correct.
 - **No `deploy/`** — no compose file, proxy config, backups or cron.
 
 ---
