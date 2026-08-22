@@ -37,7 +37,11 @@ from app.modules.kiosks import (
     kiosk_scope,
 )
 from app.modules.ops import AlertSeverity, raise_alert
-from app.modules.orders import apply_payment_refund, settle_paid_order
+from app.modules.orders import (
+    apply_payment_refund,
+    document_is_in_an_order,
+    settle_paid_order,
+)
 from app.modules.payments import (
     HttpRazorpay,
     Payment,
@@ -47,7 +51,7 @@ from app.modules.payments import (
     Settlement,
 )
 from app.modules.payments.gate import GateBilling
-from app.modules.printing import DocumentStore
+from app.modules.printing import DocumentStore, DocumentUse
 from app.modules.wallet import EntryKind, credit
 
 logger = logging.getLogger(__name__)
@@ -220,6 +224,24 @@ def get_current_device(
 
 
 CurrentDevice = Annotated[KioskDevice, Depends(get_current_device)]
+
+
+class OrderedDocuments:
+    """Whether an order is still counting on a document.
+
+    The adapter lives here, at the composition root, for the reason
+    `KioskPaperLedger` does: printing declares what it needs (`DocumentUse`),
+    orders can answer it, and neither has to import the other.
+    """
+
+    def is_referenced(self, db: Session, document_id: int) -> bool:
+        return document_is_in_an_order(db, document_id)
+
+
+def get_document_use() -> DocumentUse:
+    """Injected rather than constructed in the route, so a test can delete a
+    document without standing up an order to prove it is not in one."""
+    return OrderedDocuments()
 
 
 def get_document_store() -> DocumentStore:

@@ -11,11 +11,22 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import CurrentUser, get_db, get_document_store, get_settings_from_app
+from app.api.deps import (
+    CurrentUser,
+    get_db,
+    get_document_store,
+    get_document_use,
+    get_settings_from_app,
+)
 from app.api.schemas import DocumentResponse
 from app.core.config import Settings
 from app.core.errors import BadRequest
-from app.modules.printing import Document, DocumentStore, create_document
+from app.modules.printing import (
+    Document,
+    DocumentStore,
+    DocumentUse,
+    create_document,
+)
 from app.modules.printing import repository as printing_repo
 from app.modules.printing.documents import delete_document
 from app.modules.printing.photos import parse_layout, render_layout
@@ -142,17 +153,19 @@ def remove(
     user: CurrentUser,
     db: Annotated[Session, Depends(get_db)],
     store: Annotated[DocumentStore, Depends(get_document_store)],
+    in_use: Annotated[DocumentUse, Depends(get_document_use)],
 ) -> None:
     """Delete one of your own documents.
 
     Somebody else's is a 404, identical to one that never existed. Refused while
-    a job is still waiting to print it -- tidying a list must not be able to
-    delete the file out from under a print that has been paid for.
+    a job is still waiting to print it, and refused while an order refers to it
+    -- tidying a list must not be able to delete the file out from under a print
+    that has been paid for.
     """
     document = printing_repo.document_for_user(
         db, user_id=user.id, public_id=document_id
     )
-    delete_document(db, store, document)
+    delete_document(db, store, document, in_use=in_use)
 
 
 def _photo_filename(files: list[UploadFile]) -> str:

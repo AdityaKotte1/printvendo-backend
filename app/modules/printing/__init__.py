@@ -22,6 +22,7 @@ from app.modules.printing.claims import (
     requeue_expired,
 )
 from app.modules.printing.documents import (
+    DocumentUse,
     create_document,
     delete_document,
     normalise_document,
@@ -84,6 +85,7 @@ __all__ = [
     "parse_layout",
     "parse_page_range",
     "printable_key",
+    "DocumentUse",
     "purge_expired_files",
     "queue_depth",
     "renew_lease",

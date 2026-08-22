@@ -39,6 +39,7 @@ from app.modules.orders.service import (
 from app.modules.orders.views import (
     OrderLineView,
     OrderView,
+    document_is_in_an_order,
     order_for,
     orders_at_kiosks,
     orders_of,
@@ -65,6 +66,7 @@ __all__ = [
     "expire_stale_orders",
     "gateway_fee",
     "order_for",
+    "document_is_in_an_order",
     "orders_at_kiosks",
     "paid_orders_at_kiosks",
     "orders_of",

@@ -6,9 +6,10 @@ from datetime import UTC, datetime, timedelta
 import pikepdf
 import pytest
 
-from app.core.errors import BadRequest, NotFound
+from app.core.errors import BadRequest, Conflict, NotFound
 from app.modules.printing.documents import (
     create_document,
+    delete_document,
     normalise_document,
     normalise_pending,
     printable_key,
@@ -377,3 +378,63 @@ def test_the_sweep_ignores_documents_whose_file_is_gone(db_session, store, user)
     db_session.flush()
 
     assert normalise_pending(db_session, store) == []
+
+
+# ── a document an order is counting on ──────────────────────────────────────
+
+
+class _InUse:
+    """Stands in for the orders module, which printing may not import."""
+
+    def __init__(self, referenced: bool) -> None:
+        self.referenced = referenced
+        self.asked: list[int] = []
+
+    def is_referenced(self, db, document_id: int) -> bool:
+        self.asked.append(document_id)
+        return self.referenced
+
+
+def test_a_document_an_order_refers_to_cannot_be_deleted(db_session, store, user):
+    """The database already refused this, and refusing there was too late.
+
+    `order_items.document_id` is ON DELETE RESTRICT, so the delete failed at
+    COMMIT -- after the route had answered 204 and after the file itself had
+    been removed from disk. The student was told their file was gone, the row
+    survived, and the bytes did not: an order pointing at a document that can no
+    longer be printed.
+    """
+    document = create_document(
+        db_session, store, user_id=user.id, filename="a.pdf", data=make_pdf(1)
+    )
+    key = document.original_path
+
+    with pytest.raises(Conflict):
+        delete_document(db_session, store, document, in_use=_InUse(True))
+
+    assert db_session.get(Document, document.id) is not None
+    assert store.exists(key), "the file must survive a refused delete"
+
+
+def test_a_document_nothing_refers_to_is_deleted(db_session, store, user):
+    document = create_document(
+        db_session, store, user_id=user.id, filename="a.pdf", data=make_pdf(1)
+    )
+    key = document.original_path
+
+    delete_document(db_session, store, document, in_use=_InUse(False))
+
+    assert db_session.get(Document, document.id) is None
+    assert not store.exists(key)
+
+
+def test_the_order_check_is_asked_about_this_document(db_session, store, user):
+    """A check that is never asked the right question is not a check."""
+    document = create_document(
+        db_session, store, user_id=user.id, filename="a.pdf", data=make_pdf(1)
+    )
+    in_use = _InUse(False)
+
+    delete_document(db_session, store, document, in_use=in_use)
+
+    assert in_use.asked == [document.id]

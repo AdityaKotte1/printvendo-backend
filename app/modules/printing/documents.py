@@ -12,6 +12,7 @@ nothing, and no amount of age makes that acceptable.
 
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import Protocol
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -143,29 +144,84 @@ def normalise_pending(
     ]
 
 
-def delete_document(db: Session, store: DocumentStore, document: Document) -> None:
+class DocumentUse(Protocol):
+    """Whether anything outside printing is still counting on a document.
+
+    Orders reference a document by id, and printing may not import orders --
+    so the question comes in through here, wired at the composition root, the
+    way `PaperLedger` and `RefundSink` do.
+    """
+
+    def is_referenced(self, db: Session, document_id: int) -> bool: ...
+
+
+ALREADY_PRINTED = (
+    "That file has already been sent to a printer, so it is kept as a record of "
+    "what was printed. Its contents are deleted automatically after seven days."
+)
+
+IN_USE_BY_AN_ORDER = (
+    "That file is part of an order. Cancel the order, or let it expire, and it "
+    "can be deleted then."
+)
+
+
+def delete_document(
+    db: Session, store: DocumentStore, document: Document, *, in_use: DocumentUse
+) -> None:
     """Remove a document a student no longer wants.
 
-    Refused while anything is still waiting to print it. Deleting the file out
-    from under a queued task is the "paid and got nothing" failure, and a
-    student tidying their list must not be able to cause it.
+    Refused while anything is still waiting to print it, and refused while any
+    order refers to it. Deleting the file out from under a queued task is the
+    "paid and got nothing" failure, and a student tidying their list must not be
+    able to cause it.
+
+    **The order check is not optional and not the database's job.**
+    `order_items.document_id` is ON DELETE RESTRICT, so this used to be caught
+    at COMMIT -- which is after the route has decided on 204 and, worse, after
+    the file itself has been deleted from the store. The student was told the
+    file was gone, the row was rolled back, and the bytes were not: an order
+    left pointing at a document that could no longer be printed. Refusing here
+    means nothing has been touched yet.
+
+    `in_use` is a required argument for the same reason `legacy_id` is a
+    parameter rather than a field: a caller that has not thought about it cannot
+    accidentally skip it.
     """
-    waiting = db.execute(
-        select(PrintTask.id).where(
-            PrintTask.document_id == document.id,
-            PrintTask.state.not_in(TERMINAL_TASK_STATES),
-        )
-    ).first()
-    if waiting is not None:
+    states = [
+        state
+        for (state,) in db.execute(
+            select(PrintTask.state).where(PrintTask.document_id == document.id)
+        ).all()
+    ]
+
+    if any(state not in TERMINAL_TASK_STATES for state in states):
         raise Conflict(
             "That document is still waiting to print. It can be deleted once "
             "the job has finished."
         )
 
+    # A task that has finished still refers to this document, and
+    # `print_tasks.document_id` is ON DELETE RESTRICT -- so this used to be
+    # refused by the database at COMMIT, which is after the route answered 204
+    # and after the file was deleted from the store. Refusing here keeps the
+    # record and the bytes together: what was printed is a fact about a shop's
+    # day as much as about the student's file, and retention deletes the file
+    # after seven days while keeping the row for exactly that reason.
+    if states:
+        raise Conflict(ALREADY_PRINTED)
+
+    if in_use.is_referenced(db, document.id):
+        raise Conflict(IN_USE_BY_AN_ORDER)
+
     for key in (document.original_path, document.normalised_path):
         if key:
             store.delete(key)
     db.delete(document)
+    # Flushed so the row is gone as far as the rest of this transaction is
+    # concerned. Without it a caller that reads back in the same request still
+    # sees the document it has just deleted.
+    db.flush()
 
 
 def purge_expired_files(

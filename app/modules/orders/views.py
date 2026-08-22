@@ -24,7 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.kiosks import Kiosk
-from app.modules.orders.models import Order, OrderState
+from app.modules.orders.models import Order, OrderItem, OrderState
 from app.modules.printing import Document
 
 
@@ -208,6 +208,17 @@ def paid_orders_at_kiosks(
     orders = list(db.execute(stmt).scalars())
     kiosks, documents = _public_ids(db, orders)
     return [_view(o, kiosks, documents) for o in orders]
+
+
+def document_is_in_an_order(db: Session, document_id: int) -> bool:
+    """Whether any order line still refers to this document.
+
+    Asked before a document is deleted. Every order counts, not only unpaid
+    ones: a paid order's line is the record of what was bought, and an invoice
+    that has lost the thing it was for is not a record of anything.
+    """
+    stmt = select(OrderItem.id).where(OrderItem.document_id == document_id).limit(1)
+    return db.execute(stmt).first() is not None
 
 
 def orders_of(db: Session, *, user_id: int, limit: int = 50) -> list[OrderView]:

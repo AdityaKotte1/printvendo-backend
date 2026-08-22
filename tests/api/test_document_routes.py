@@ -348,4 +348,9 @@ def test_a_document_whose_print_has_finished_can_be_deleted(
 
     response = client.delete(f"/v1/app/documents/{body['id']}", headers=_auth(student))
 
-    assert response.status_code == 204
+    # Refused, and it always was: `print_tasks.document_id` is ON DELETE
+    # RESTRICT, so the database rejected this at COMMIT -- after the 204 had
+    # been decided and after the file had been removed from the store. The
+    # student was told it was gone, the row survived, and the bytes did not.
+    assert response.status_code == 409
+    assert "record" in response.json()["detail"]
