@@ -23,11 +23,16 @@ from app.core.money import as_money
 from app.modules.kiosks.models import Kiosk
 
 # Used when a kiosk has set no price of its own.
+# Per **sheet**: `_single` is a sheet printed on one side, `_double` a sheet
+# printed on both. So black and white is 2.00 a page single-sided and 1.50 a
+# page double-sided -- the discount that makes duplex worth choosing -- while
+# colour is 10.00 a page either way, which is the operator's rule: colour costs
+# what it costs per side, and the saving there is paper rather than money.
 DEFAULT_PRICES: dict[str, Decimal] = {
     "bw_single": Decimal("2.00"),
     "bw_double": Decimal("3.00"),
     "color_single": Decimal("10.00"),
-    "color_double": Decimal("18.00"),
+    "color_double": Decimal("20.00"),
 }
 
 PRICE_FIELDS = ("bw_single", "bw_double", "color_single", "color_double")

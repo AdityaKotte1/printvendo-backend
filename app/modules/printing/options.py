@@ -23,7 +23,6 @@ misreads its own books.
 
 import re
 from dataclasses import dataclass
-from math import ceil
 
 from app.core.errors import BadRequest
 
@@ -155,12 +154,27 @@ class PrintOptions:
 
 @dataclass(frozen=True)
 class Workload:
-    """What a print request costs in pages, sides and paper."""
+    """What a print request costs in pages, sides and paper.
+
+    `sheets` splits in two because the two kinds are **priced differently**: a
+    sheet printed on both sides is charged at the duplex rate, and a sheet
+    printed on one side is charged at the single rate whatever the job asked
+    for. A seven-page duplex job is three of the first and one of the second --
+    the last sheet has a blank back, and charging the double rate for it charges
+    for a side nobody printed.
+
+    The split lives here rather than in the quote because this is the one
+    calculation pricing, paper accounting and the device all read. Two of them
+    working it out separately is how a price, a tray count and a printed job
+    come to disagree.
+    """
 
     pages: int
     selected_pages: int
     impressions: int
     sheets: int
+    sheets_both_sides: int
+    sheets_one_side: int
 
 
 def workload(options: PrintOptions, *, total_pages: int) -> Workload:
@@ -175,15 +189,20 @@ def workload(options: PrintOptions, *, total_pages: int) -> Workload:
 
     # Duplex halves the paper, rounding up: an odd number of sides still leaves
     # one sheet printed on one side only. Each *copy* rounds separately --
-    # copies do not share a sheet, because a two-copy job is two documents.
+    # copies do not share a sheet, because the back of one copy's last page is
+    # not the front of the next copy's first.
     if options.duplex:
-        sheets = ceil(selected / 2) * options.copies
+        both_sides = (selected // 2) * options.copies
+        one_side = (selected % 2) * options.copies
     else:
-        sheets = impressions
+        both_sides = 0
+        one_side = impressions
 
     return Workload(
         pages=total_pages,
         selected_pages=selected,
         impressions=impressions,
-        sheets=sheets,
+        sheets=both_sides + one_side,
+        sheets_both_sides=both_sides,
+        sheets_one_side=one_side,
     )

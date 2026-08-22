@@ -48,10 +48,17 @@ class LineQuote:
     page_count: int
 
 
-def _rate_key(options: PrintOptions) -> str:
+def _rates(options: PrintOptions, prices: dict[str, Decimal]) -> tuple[Decimal, Decimal]:
+    """(what a both-sides sheet costs, what a one-side sheet costs) here.
+
+    Both are needed even for a duplex job, because a duplex job with an odd
+    number of pages finishes on a sheet printed on one side.
+    """
     colour = "color" if options.colour else "bw"
-    side = "double" if options.duplex else "single"
-    return f"{colour}_{side}"
+    return (
+        as_money(prices[f"{colour}_double"]),
+        as_money(prices[f"{colour}_single"]),
+    )
 
 
 def quote_line(
@@ -64,12 +71,21 @@ def quote_line(
     from a default repeated at each call site.
     """
     load = workload(options, total_pages=total_pages)
-    rate = as_money(prices[_rate_key(options)])
+    both_sides, one_side = _rates(options, prices)
+
+    # **Priced by the sheet, not by the side.** A `_double` price is what one
+    # sheet printed on both sides costs; a `_single` price is what one sheet
+    # printed on one side costs. Multiplying the double rate by the number of
+    # sides -- which this did -- charged a ten-page duplex job 10 x 3.00 where
+    # it uses five sheets, so choosing double-sided halved the paper and raised
+    # the bill. Duplex is dearer per sheet and cheaper per page, which is the
+    # whole reason a student picks it.
+    amount = both_sides * load.sheets_both_sides + one_side * load.sheets_one_side
 
     return LineQuote(
         impressions=load.impressions,
         sheets=load.sheets,
-        amount_inr=as_money(rate * load.impressions),
+        amount_inr=as_money(amount),
         page_count=load.pages,
     )
 

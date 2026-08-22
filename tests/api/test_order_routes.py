@@ -108,9 +108,9 @@ def kiosk(db_session) -> Kiosk:
         onboarding_stage=OnboardingStage.LIVE,
         accepts_wallet=True,
         price_bw_single=Decimal("2.00"),
-        price_bw_double=Decimal("1.50"),
+        price_bw_double=Decimal("3.00"),
         price_color_single=Decimal("10.00"),
-        price_color_double=Decimal("8.00"),
+        price_color_double=Decimal("18.00"),
     )
     db_session.add(kiosk)
     db_session.flush()

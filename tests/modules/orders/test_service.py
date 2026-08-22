@@ -51,9 +51,9 @@ def kiosk(db_session):
         onboarding_stage=OnboardingStage.LIVE,
         accepts_wallet=True,
         price_bw_single=Decimal("2.00"),
-        price_bw_double=Decimal("1.50"),
+        price_bw_double=Decimal("3.00"),
         price_color_single=Decimal("10.00"),
-        price_color_double=Decimal("8.00"),
+        price_color_double=Decimal("18.00"),
     )
     db_session.add(kiosk)
     db_session.flush()
@@ -162,9 +162,11 @@ def test_an_item_keeps_the_settings_that_were_paid_for(db_session, user, kiosk):
 
     item = order.items[0]
     assert (item.colour, item.duplex, item.copies) == (True, True, 2)
+    # A page is one side of a sheet: ten pages, two copies, twenty sides, ten
+    # sheets printed on both sides -- and the money follows the sheets.
     assert item.impressions == 20
     assert item.sheets == 10
-    assert item.amount_inr == Decimal("160.00")
+    assert item.amount_inr == Decimal("180.00")  # 10 x 18.00
 
 
 def test_an_order_records_which_gateway_collects(db_session, user, kiosk):

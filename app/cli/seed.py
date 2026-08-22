@@ -59,14 +59,16 @@ DOMAIN = "demo.printvendo.com"
 TRAY = 500
 STARTING_BALANCE = Decimal("500.00")
 
-# Per *sheet*, not per page -- which is why double-sided is dearer than
-# single-sided rather than cheaper: the same sheet, twice the toner. Pricing
-# refuses the other way round, and the first version of this seed was refused.
+# Per **sheet**: `_single` is a sheet printed on one side, `_double` a sheet
+# printed on both. Black and white works out at 1.50 a page double-sided
+# against 2.00 single-sided; colour is 10.00 a page either way. Pricing refuses
+# a double rate below the single one, and the first version of this seed was
+# refused for getting that backwards.
 PRICES = {
     "bw_single": Decimal("2.00"),
     "bw_double": Decimal("3.00"),
     "color_single": Decimal("10.00"),
-    "color_double": Decimal("15.00"),
+    "color_double": Decimal("20.00"),
 }
 
 
