@@ -19,6 +19,8 @@ Two rules here are not preferences:
   this became inert in the first place, so the adapter tells whoever wired it.
 """
 
+import json
+
 import httpx
 import pytest
 
@@ -111,8 +113,6 @@ def test_each_kind_of_message_is_distinguishable():
     notifier.send_password_reset(email="a@example.com", token=TOKEN)
     notifier.send_staff_invite(email="a@example.com", token=TOKEN, kiosk_name="Shop")
 
-    import json  # noqa: PLC0415
-
     subjects = {json.loads(request.content)["subject"] for request in seen}
     assert len(subjects) == 3
 
@@ -201,3 +201,39 @@ def test_without_an_api_key_it_refuses_to_be_built():
             sender_email="hello@printvendo.com",
             sender_name="Printvendo",
         )
+
+
+# -- a kiosk name is somebody else's text -----------------------------------
+
+
+def test_markup_in_a_kiosk_name_cannot_reach_the_email_as_markup():
+    """A kiosk name is chosen by an owner, and an invitation goes to whatever
+    address they type. Interpolated raw, that is a way to send arbitrary styled
+    content -- a link to somewhere else, wearing Printvendo's sending domain --
+    to a stranger who has every reason to trust it.
+
+    Escaped, the name still reads correctly to anyone whose shop genuinely
+    contains an ampersand.
+    """
+    seen: list[httpx.Request] = []
+
+    _notifier(_accepting(seen)).send_staff_invite(
+        email="victim@example.com",
+        token=TOKEN,
+        kiosk_name='<a href="https://evil.example">Claim your prize</a>',
+    )
+
+    body = json.loads(seen[0].content)["htmlContent"]
+    assert "<a href=\"https://evil.example\"" not in body
+    assert "&lt;a href=" in body
+
+
+def test_an_honest_name_with_an_ampersand_survives_readably():
+    seen: list[httpx.Request] = []
+
+    _notifier(_accepting(seen)).send_staff_invite(
+        email="refiller@example.com", token=TOKEN, kiosk_name="Ram & Sons Xerox"
+    )
+
+    body = json.loads(seen[0].content)["htmlContent"]
+    assert "Ram &amp; Sons Xerox" in body

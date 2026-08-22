@@ -11,6 +11,7 @@ no key is configured, so a developer can complete a verification flow locally by
 reading the log and nothing silently pretends to have sent an email.
 """
 
+import html
 import logging
 from collections.abc import Callable
 from typing import Protocol
@@ -81,6 +82,14 @@ class BrevoNotifier:
     building, header encoding and JSON serialisation are then the library's
     actual behaviour rather than a mock's idea of it, and nobody needs a live
     key to run the suite.
+
+    **Anything a person chose is escaped before it reaches the body.** Only one
+    such value exists today -- a kiosk name -- and it arrives here having been
+    typed by an owner into a form, then sent to an address of their choosing.
+    That is a way to put arbitrary markup in front of a stranger under our
+    sending domain, so it is escaped at the point of interpolation. Adding a
+    second such value means escaping that one too; there is no template engine
+    here doing it by default.
     """
 
     def __init__(
@@ -136,15 +145,26 @@ class BrevoNotifier:
 
     def send_staff_invite(self, *, email: str, token: str, kiosk_name: str) -> None:
         link = f"{self._app}/accept-invite?token={token}"
+
+        # A kiosk name is text an owner chose, and an invitation goes to
+        # whatever address they typed. Interpolated raw it is a way to send
+        # arbitrary styled content -- a link somewhere else, wearing our sending
+        # domain -- to a stranger with every reason to trust it. Escaped, a shop
+        # genuinely called "Ram & Sons" still reads correctly.
+        safe_name = html.escape(kiosk_name)
+
         self._send(
             kind="staff_invite",
             email=email,
             # The shop is named in the subject on purpose: "you have been
             # invited" with no shop name reads as phishing to the person who
             # receives it, and an invitation nobody trusts is not an invitation.
+            # Not escaped here: a subject is plain text, and `&amp;` in it would
+            # be shown literally. It travels as JSON, so there is no header to
+            # inject into.
             subject=f"You have been invited to {kiosk_name} on Printvendo",
             body=(
-                f"<p>You have been invited to work at <b>{kiosk_name}</b>.</p>"
+                f"<p>You have been invited to work at <b>{safe_name}</b>.</p>"
                 f'<p><a href="{link}">Accept the invitation</a></p>'
                 "<p>Nothing is shared with them until you accept.</p>"
             ),
