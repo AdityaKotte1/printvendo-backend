@@ -157,7 +157,7 @@ def report_status(
     ledger = KioskPaperLedger(kiosk)
 
     if state is TaskState.PRINTING:
-        start_printing(db, task)
+        start_printing(db, task, outcome=outcome)
     elif state is TaskState.PRINTED:
         report_printed(
             db, task, ledger, sheets_used=payload.sheets_used, outcome=outcome

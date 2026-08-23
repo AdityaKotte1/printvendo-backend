@@ -267,19 +267,19 @@ class OrderedDocuments:
 
 
 class OrderProgress:
-    """Tells the order behind a task that the task has finished.
+    """Tells the order behind a task that the task has moved.
 
     The adapter lives here for the reason `KioskPaperLedger` does: printing
     declares what it needs (`TaskOutcome`), orders knows what a finished print
     means for an order, and neither imports the other.
     """
 
-    def task_finished(self, db: Session, task) -> None:
+    def task_moved(self, db: Session, task) -> None:
         refresh_order_state(db, document_id=task.document_id, kiosk_id=task.kiosk_id)
 
 
 def get_task_outcome() -> TaskOutcome:
-    """What a finished print means for whatever paid for it."""
+    """What a print's progress means for whatever paid for it."""
     return OrderProgress()
 
 

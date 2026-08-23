@@ -718,3 +718,34 @@ def test_a_refunded_order_is_left_alone(db_session, user, kiosk):
     refresh_order_state(db_session, document_id=task.document_id, kiosk_id=kiosk.id)
 
     assert order.state is OrderState.REFUNDED
+
+
+def test_an_order_shows_as_printing_while_the_printer_works(db_session, user, kiosk):
+    """Queued, printing, printed -- and the middle one is the point.
+
+    An order that jumped from paid straight to completed showed a student
+    "queued" for the whole print and then "printed", which is two of the three
+    states they were promised.
+    """
+    from app.modules.orders.service import pay_with_wallet, refresh_order_state
+    from app.modules.printing.models import TaskState
+
+    _funded(db_session, user, "progress_printing")
+
+    order = place_order(
+        db_session,
+        user=user,
+        kiosk=kiosk,
+        requests=[request_for(make_document(db_session, user))],
+        method=PaymentMethod.WALLET,
+    )
+    pay_with_wallet(db_session, order)
+    assert order.state is OrderState.PAID, "claimed but not yet on the printer"
+
+    task = db_session.query(PrintTask).filter_by(kiosk_id=kiosk.id).one()
+    task.state = TaskState.PRINTING
+    db_session.flush()
+
+    refresh_order_state(db_session, document_id=task.document_id, kiosk_id=kiosk.id)
+
+    assert order.state is OrderState.DISPATCHED

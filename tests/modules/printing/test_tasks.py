@@ -48,9 +48,26 @@ class FakeLedger:
         return last["actual"] if last["actual"] is not None else last["predicted"]
 
 
+@dataclass
+class FakeOutcome:
+    """Records every time the thing that paid for this print was told about
+    it. A list rather than a flag, because the point of the seam is that it
+    hears about the *middle* of a print as well as the end."""
+
+    moves: list[TaskState] = field(default_factory=list)
+
+    def task_moved(self, db, task) -> None:
+        self.moves.append(task.state)
+
+
 @pytest.fixture
 def ledger() -> FakeLedger:
     return FakeLedger()
+
+
+@pytest.fixture
+def outcome() -> FakeOutcome:
+    return FakeOutcome()
 
 
 @pytest.fixture
@@ -110,6 +127,25 @@ def test_starting_extends_the_lease(db_session, claimed):
 
     assert claimed.lease_expires_at > before
     assert claimed.lease_expires_at == later + LEASE
+
+
+def test_starting_tells_whatever_paid_for_this_print(db_session, claimed, outcome):
+    """Queued, printing, printed. The order behind the task has to hear about
+    the middle one at the moment it happens -- an order told only about the end
+    shows a student "queued" for the whole print and then jumps to "printed",
+    which is two of the three states they were promised."""
+    start_printing(db_session, claimed, outcome=outcome)
+
+    assert outcome.moves == [TaskState.PRINTING]
+
+
+def test_a_start_with_nobody_to_tell_is_allowed(db_session, claimed):
+    """A print with no order behind it -- a reprint, a test page -- still
+    starts. The seam has a do-nothing implementation rather than the caller
+    being trusted to remember."""
+    start_printing(db_session, claimed)
+
+    assert claimed.state is TaskState.PRINTING
 
 
 # ── finishing, and the paper ────────────────────────────────────────────────

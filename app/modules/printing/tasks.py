@@ -51,6 +51,30 @@ class PaperLedger(Protocol):
     ) -> None: ...
 
 
+class TaskOutcome(Protocol):
+    """What a print's progress means to whoever bought it.
+
+    Printing owns the task and must not import orders, so "this order has
+    moved" arrives through here, wired at the composition root -- the same seam
+    as `PaperLedger`. Without it the order's own states existed and nothing
+    ever set them: a student's screen said "queued" while the paper was already
+    in their hand.
+
+    It is called on **every** move, not only the last one, because the middle
+    state is the one a student is standing there reading.
+    """
+
+    def task_moved(self, db: Session, task: PrintTask) -> None: ...
+
+
+class NoOutcome:
+    """For callers with no order behind the task. Explicit rather than a
+    default argument, so nobody skips the seam without saying so."""
+
+    def task_moved(self, db: Session, task: PrintTask) -> None:
+        return None
+
+
 def _require_in_hand(task: PrintTask) -> None:
     if task.state in TERMINAL_TASK_STATES:
         raise Conflict(ALREADY_FINISHED)
@@ -59,9 +83,21 @@ def _require_in_hand(task: PrintTask) -> None:
 
 
 def start_printing(
-    db: Session, task: PrintTask, *, now: datetime | None = None
+    db: Session,
+    task: PrintTask,
+    *,
+    outcome: TaskOutcome | None = None,
+    now: datetime | None = None,
 ) -> PrintTask:
-    """The device has the file and has handed it to CUPS.
+    """The **printer** has it -- not the device, the printer.
+
+    The agent reports this when the job reaches the head of the queue, not when
+    it hands the file over: a job waiting behind somebody else's two hundred
+    pages is still queued, and a student told "printing" walks to the shop to
+    collect nothing.
+
+    The order hears about it too, so the screen moves from queued to printing
+    while it is happening rather than jumping straight to printed at the end.
 
     Extends the lease: a long colour job must not be requeued underneath the
     machine that is printing it, which would produce the duplicate this module
@@ -74,28 +110,9 @@ def start_printing(
     task.started_at = task.started_at or now
     task.lease_expires_at = now + LEASE
     db.add(task)
+
+    (outcome or NoOutcome()).task_moved(db, task)
     return task
-
-
-class TaskOutcome(Protocol):
-    """What finishing a print means to whoever bought it.
-
-    Printing owns the task and must not import orders, so "this order is
-    finished now" arrives through here, wired at the composition root -- the
-    same seam as `PaperLedger`. Without it the order's own states existed and
-    nothing ever set them: a student's screen said "queued" while the paper was
-    already in their hand.
-    """
-
-    def task_finished(self, db: Session, task: PrintTask) -> None: ...
-
-
-class NoOutcome:
-    """For callers with no order behind the task. Explicit rather than a
-    default argument, so nobody skips the seam without saying so."""
-
-    def task_finished(self, db: Session, task: PrintTask) -> None:
-        return None
 
 
 def report_printed(
@@ -131,7 +148,7 @@ def report_printed(
         reference=task.public_id,
     )
 
-    (outcome or NoOutcome()).task_finished(db, task)
+    (outcome or NoOutcome()).task_moved(db, task)
     return task
 
 
@@ -179,7 +196,7 @@ def report_failed(
     # A failure finishes the task as surely as a success does, and the order
     # behind it has to hear about both -- half an order printed is a real
     # outcome the student is owed the difference on.
-    (outcome or NoOutcome()).task_finished(db, task)
+    (outcome or NoOutcome()).task_moved(db, task)
     return task
 
 
