@@ -16,14 +16,21 @@ no owner at all quietly collected into the platform's account.
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import CurrentUser, get_db
 from app.api.schemas import StudentKioskResponse
 from app.core.errors import NotFound
 from app.core.ids import IdPrefix, InvalidId, parse_id
-from app.modules.kiosks import Kiosk, effective_prices, sheets_remaining
+from app.modules.kiosks import (
+    Kiosk,
+    effective_prices,
+    favourite_kiosk,
+    favourite_kiosk_ids,
+    sheets_remaining,
+    unfavourite_kiosk,
+)
 from app.modules.kiosks import repository as kiosk_repo
 from app.modules.kiosks.enums import OnboardingStage
 from app.modules.kiosks.scope import Scope
@@ -47,7 +54,9 @@ def _printable(db: Session, kiosk: Kiosk) -> bool:
     )
 
 
-def _as_response(db: Session, kiosk: Kiosk) -> StudentKioskResponse:
+def _as_response(
+    db: Session, kiosk: Kiosk, *, saved: set[int] | None = None
+) -> StudentKioskResponse:
     prices = effective_prices(kiosk)
     remaining = sheets_remaining(db, kiosk)
     return StudentKioskResponse(
@@ -57,6 +66,7 @@ def _as_response(db: Session, kiosk: Kiosk) -> StudentKioskResponse:
         longitude=kiosk.longitude,
         location_description=kiosk.location_description,
         accepts_wallet=kiosk.accepts_wallet,
+        is_favourite=saved is not None and kiosk.id in saved,
         # Derived from the tray rather than carried as a flag, so it cannot
         # disagree with the number printed next to it.
         is_out_of_paper=remaining <= 0,
@@ -81,7 +91,11 @@ def list_printable_kiosks(
     understand.
     """
     kiosks = kiosk_repo.list_kiosks(db, UNRESTRICTED)
-    return [_as_response(db, k) for k in kiosks if _printable(db, k)]
+    # One query for the whole page rather than one per shop. The set marks up a
+    # list that has already been fetched and filtered; it is not a way of
+    # reading kiosks, and there is still no unscoped read of those.
+    saved = favourite_kiosk_ids(db, user_id=user.id)
+    return [_as_response(db, k, saved=saved) for k in kiosks if _printable(db, k)]
 
 
 @router.get("/{kiosk_id}", response_model=StudentKioskResponse)
@@ -105,4 +119,46 @@ def get_printable_kiosk(
     kiosk = kiosk_repo.get_kiosk(db, UNRESTRICTED, kiosk_id)
     if not _printable(db, kiosk):
         raise NotFound(NO_SUCH_KIOSK)
-    return _as_response(db, kiosk)
+    return _as_response(db, kiosk, saved=favourite_kiosk_ids(db, user_id=user.id))
+
+
+def _savable(db: Session, user, kiosk_id: str) -> Kiosk:
+    """The shop this student may save, or the same 404 as anywhere else.
+
+    Saving goes through the same visibility rule as looking: a kiosk a student
+    cannot see is a kiosk they cannot save, so the star cannot be used to find
+    out whether a shop exists.
+    """
+    try:
+        parse_id(kiosk_id, IdPrefix.KIOSK)
+    except InvalidId:
+        raise NotFound(NO_SUCH_KIOSK) from None
+
+    kiosk = kiosk_repo.get_kiosk(db, UNRESTRICTED, kiosk_id)
+    if not _printable(db, kiosk):
+        raise NotFound(NO_SUCH_KIOSK)
+    return kiosk
+
+
+@router.put("/{kiosk_id}/favourite", status_code=status.HTTP_204_NO_CONTENT)
+def save_kiosk(
+    kiosk_id: str,
+    user: CurrentUser,
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    """Save a shop. Saving one already saved changes nothing.
+
+    PUT rather than POST because it is a toggle being set to a value, and a
+    student tapping a star twice on a slow connection must not be told off.
+    """
+    favourite_kiosk(db, user_id=user.id, kiosk=_savable(db, user, kiosk_id))
+
+
+@router.delete("/{kiosk_id}/favourite", status_code=status.HTTP_204_NO_CONTENT)
+def forget_kiosk(
+    kiosk_id: str,
+    user: CurrentUser,
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    """Forget a shop. Forgetting one that was never saved is not an error."""
+    unfavourite_kiosk(db, user_id=user.id, kiosk=_savable(db, user, kiosk_id))

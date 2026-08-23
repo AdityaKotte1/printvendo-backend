@@ -246,6 +246,9 @@ class StudentKioskResponse(BaseModel):
     longitude: float | None
     location_description: str | None
     accepts_wallet: bool
+    # Whether *this* student saved it. A property of the person asking, not of
+    # the shop -- which is why it is never true for a caller who saved nothing.
+    is_favourite: bool = False
     is_out_of_paper: bool
     sheets_remaining: int
     price_bw_single: Decimal

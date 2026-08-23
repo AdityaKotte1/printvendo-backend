@@ -242,6 +242,38 @@ class KioskAssignment(Base):
     )
 
 
+class KioskFavourite(Base):
+    """A shop a student saved.
+
+    The one table here that records something about a *student* rather than
+    about a shop's operation, so it is deliberately narrow: it answers "which
+    shops did this person save" and nothing else. There is no read in the other
+    direction -- who saved this shop is a question about students, asked from
+    the kiosk's side, and an owner has no business asking it. Reversing that
+    would need a new function, which is the point.
+    """
+
+    __tablename__ = "kiosk_favourites"
+    __table_args__ = (
+        UniqueConstraint("user_id", "kiosk_id", name="uq_favourite_user_kiosk"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    # CASCADE, unlike an order line: a saved shop is a shortcut, not a record.
+    # A retired kiosk should drop out of everybody's list rather than keep a row
+    # that resolves to nothing.
+    kiosk_id: Mapped[int] = mapped_column(
+        ForeignKey("kiosks.id", ondelete="CASCADE"), index=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class PaperRefillLog(Base):
     """One row per paper change, whoever made it.
 

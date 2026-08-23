@@ -47,6 +47,8 @@ AUDIT_MATRIX: dict[tuple[str, str], tuple[str, str]] = {
     # of access change an owner should be able to see afterwards.
     ("POST", "/v1/app/staff/accept-invite"): (AUDITED, ""),
     # ── student's own things ────────────────────────────────────────────────
+    ("PUT", "/v1/app/kiosks/{kiosk_id}/favourite"): (EXEMPT, SELF_SERVICE),
+    ("DELETE", "/v1/app/kiosks/{kiosk_id}/favourite"): (EXEMPT, SELF_SERVICE),
     ("POST", "/v1/app/documents"): (EXEMPT, SELF_SERVICE),
     ("POST", "/v1/app/documents/photo-layout"): (EXEMPT, SELF_SERVICE),
     ("DELETE", "/v1/app/documents/{document_id}"): (EXEMPT, SELF_SERVICE),

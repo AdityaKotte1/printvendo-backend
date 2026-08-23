@@ -199,6 +199,7 @@ def test_the_kiosk_list_says_nothing_about_who_owns_a_shop(client, auth, kiosk):
         "longitude",
         "location_description",
         "accepts_wallet",
+        "is_favourite",
         "is_out_of_paper",
         "sheets_remaining",
         "price_bw_single",
@@ -507,3 +508,56 @@ def test_somebody_elses_receipt_is_a_404(
     )
 
     assert response.status_code == 404
+
+
+# ── saved shops ─────────────────────────────────────────────────────────────
+
+
+def test_a_shop_can_be_saved_and_forgotten(client, auth, kiosk):
+    saved = client.put(f"/v1/app/kiosks/{kiosk.public_id}/favourite", headers=auth)
+    assert saved.status_code == 204
+    assert client.get("/v1/app/kiosks", headers=auth).json()[0]["is_favourite"] is True
+
+    forgotten = client.delete(f"/v1/app/kiosks/{kiosk.public_id}/favourite", headers=auth)
+    assert forgotten.status_code == 204
+    assert client.get("/v1/app/kiosks", headers=auth).json()[0]["is_favourite"] is False
+
+
+def test_saving_twice_is_not_an_error(client, auth, kiosk):
+    """A star is a toggle on an unreliable network."""
+    client.put(f"/v1/app/kiosks/{kiosk.public_id}/favourite", headers=auth)
+
+    again = client.put(f"/v1/app/kiosks/{kiosk.public_id}/favourite", headers=auth)
+
+    assert again.status_code == 204
+
+
+def test_forgetting_something_never_saved_is_not_an_error(client, auth, kiosk):
+    response = client.delete(f"/v1/app/kiosks/{kiosk.public_id}/favourite", headers=auth)
+
+    assert response.status_code == 204
+
+
+def test_saving_a_kiosk_that_does_not_exist_is_a_404(client, auth):
+    """The same answer as a shop that exists but cannot sell -- so the star
+    cannot be used to find out which shops are real."""
+    response = client.put("/v1/app/kiosks/ksk_nosuchkiosk1234/favourite", headers=auth)
+
+    assert response.status_code == 404
+
+
+def test_another_students_saved_shops_are_not_mine(client, auth, db_session, kiosk):
+    client.put(f"/v1/app/kiosks/{kiosk.public_id}/favourite", headers=auth)
+
+    stranger = User(email="stranger@example.com", hashed_password="x")
+    db_session.add(stranger)
+    db_session.flush()
+    token = create_token(
+        stranger.public_id, TokenType.ACCESS, SECRET, timedelta(minutes=5)
+    )
+
+    listed = client.get(
+        "/v1/app/kiosks", headers={"Authorization": f"Bearer {token}"}
+    ).json()
+
+    assert listed[0]["is_favourite"] is False

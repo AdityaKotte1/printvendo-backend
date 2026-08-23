@@ -56,6 +56,12 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     # same list of shops that can currently print.
     ("GET", "/v1/app/kiosks"): {STUDENT, OWNER, REFILLER, ADMIN},
     ("GET", "/v1/app/kiosks/{kiosk_id}"): {STUDENT, OWNER, REFILLER, ADMIN},
+    # Saving a shop is a note about the person doing it, so every signed-in
+    # audience may, and each sees only their own. It goes through the same
+    # visibility rule as looking, so a star cannot be used to discover whether
+    # a shop exists.
+    ("PUT", "/v1/app/kiosks/{kiosk_id}/favourite"): {STUDENT, OWNER, REFILLER, ADMIN},
+    ("DELETE", "/v1/app/kiosks/{kiosk_id}/favourite"): {STUDENT, OWNER, REFILLER, ADMIN},
     # An order belongs to the person who placed it. Somebody else's is 404, not
     # 403 -- including for an admin, who has no business reading a student's
     # order through the student surface.

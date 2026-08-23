@@ -26,7 +26,12 @@ from app.modules.kiosks.enums import (
     KioskType,
     OnboardingStage,
 )
-from app.modules.kiosks.models import Kiosk, KioskDevice, KioskPaper
+from app.modules.kiosks.favourites import (
+    favourite_kiosk,
+    favourite_kiosk_ids,
+    unfavourite_kiosk,
+)
+from app.modules.kiosks.models import Kiosk, KioskDevice, KioskFavourite, KioskPaper
 from app.modules.kiosks.onboarding import (
     BillingCheck,
     PlatformOnlyBilling,
@@ -80,6 +85,7 @@ __all__ = [
     "IssuedEnrolment",
     "Kiosk",
     "KioskDevice",
+    "KioskFavourite",
     "KioskPaper",
     "KioskType",
     "OnboardingStage",
@@ -95,7 +101,10 @@ __all__ = [
     "is_online",
     "is_selling",
     "issue_enrolment_code",
+    "favourite_kiosk",
+    "favourite_kiosk_ids",
     "kiosk_scope",
+    "unfavourite_kiosk",
     "system_scope",
     "move_to",
     "read_pricing",
