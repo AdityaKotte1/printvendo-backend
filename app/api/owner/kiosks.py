@@ -23,6 +23,7 @@ from app.api.deps import (
     get_billing_check,
     get_db,
     get_notifier,
+    require_any_role,
 )
 from app.api.schemas import (
     DeviceStatusResponse,
@@ -39,6 +40,7 @@ from app.api.schemas import (
 )
 from app.core.errors import BadRequest
 from app.core.notifier import Notifier
+from app.modules.identity.roles import Role
 from app.modules.kiosks import (
     AssignmentRole,
     BandSource,
@@ -58,7 +60,12 @@ from app.modules.kiosks import repository as kiosk_repo
 from app.modules.kiosks.paper import reset_paper, set_paper, sheets_remaining
 from app.modules.kiosks.staffing import invite_staff, list_staff, unassign
 
-router = APIRouter(prefix="/v1/owner/kiosks", tags=["owner"])
+router = APIRouter(
+    prefix="/v1/owner/kiosks",
+    tags=["owner"],
+    # On the router, so a route added here cannot forget it.
+    dependencies=[Depends(require_any_role(Role.OWNER, Role.ADMIN))],
+)
 
 # Stages an owner may set for themselves. ERROR and RETIRED are admin
 # decisions, and the onboarding ladder is not an owner's to climb.

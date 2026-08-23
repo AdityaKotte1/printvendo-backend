@@ -13,7 +13,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class PaperResponse(BaseModel):
@@ -260,6 +260,15 @@ class StudentKioskResponse(BaseModel):
 # ── orders ──────────────────────────────────────────────────────────────────
 
 
+# What one order may weigh. Not product limits -- a student is bounded by the
+# kiosk's paper and by what they will pay -- but a bound on the work a single
+# request can buy. Without them, one request quotes an arbitrary number of lines
+# (a document lookup each) and splits an arbitrary string into tokens, and the
+# refusal comes only after all of it has been done.
+MAX_ORDER_LINES = 50
+MAX_PAGE_RANGE_CHARS = 200  # the width of `order_items.page_range`
+
+
 class OrderLineRequest(BaseModel):
     """One document, printed one way."""
 
@@ -267,13 +276,13 @@ class OrderLineRequest(BaseModel):
     colour: bool = False
     duplex: bool = False
     copies: int = 1
-    page_range: str | None = None
+    page_range: str | None = Field(default=None, max_length=MAX_PAGE_RANGE_CHARS)
 
 
 class PlaceOrderRequest(BaseModel):
     kiosk_id: str
     payment_method: Literal["wallet", "gateway"]
-    items: list[OrderLineRequest]
+    items: list[OrderLineRequest] = Field(min_length=1, max_length=MAX_ORDER_LINES)
 
 
 class OrderItemResponse(BaseModel):

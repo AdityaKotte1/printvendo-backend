@@ -16,13 +16,14 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.api.deps import CurrentUser, KioskScope, get_db
+from app.api.deps import CurrentUser, KioskScope, get_db, require_any_role
 from app.api.schemas import (
     PaperResponse,
     PaperUpdateRequest,
     RefillerKioskResponse,
     RefillLogResponse,
 )
+from app.modules.identity.roles import Role
 from app.modules.kiosks import Kiosk
 from app.modules.kiosks import repository as kiosk_repo
 from app.modules.kiosks.paper import (
@@ -32,7 +33,13 @@ from app.modules.kiosks.paper import (
     sheets_remaining,
 )
 
-router = APIRouter(prefix="/v1/refiller/kiosks", tags=["refiller"])
+router = APIRouter(
+    prefix="/v1/refiller/kiosks",
+    tags=["refiller"],
+    # A refiller, or an admin standing in for one. Scope still decides which
+    # kiosks are behind the door.
+    dependencies=[Depends(require_any_role(Role.REFILLER, Role.ADMIN))],
+)
 
 
 def _paper_of(db: Session, kiosk: Kiosk) -> PaperResponse:

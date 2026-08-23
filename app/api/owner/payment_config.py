@@ -29,6 +29,7 @@ from app.api.deps import (
     get_document_store,
     get_secret_box,
     get_settings_from_app,
+    require_any_role,
     require_role,
 )
 from app.api.schemas import (
@@ -53,7 +54,11 @@ from app.modules.payments import (
 from app.modules.printing import DocumentStore
 from app.modules.printing.storage import StorageArea
 
-router = APIRouter(prefix="/v1/owner/payment-config", tags=["owner"])
+router = APIRouter(
+    prefix="/v1/owner/payment-config",
+    tags=["owner"],
+    dependencies=[Depends(require_any_role(Role.OWNER, Role.ADMIN))],
+)
 
 CurrentOwner = Annotated[User, Depends(require_role(Role.OWNER))]
 

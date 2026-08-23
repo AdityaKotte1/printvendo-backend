@@ -561,3 +561,59 @@ def test_another_students_saved_shops_are_not_mine(client, auth, db_session, kio
     ).json()
 
     assert listed[0]["is_favourite"] is False
+
+
+# ── what a request may weigh ────────────────────────────────────────────────
+
+
+def test_an_order_of_absurdly_many_lines_is_refused(client, auth, kiosk, document):
+    """Refused by the schema, before any of it is quoted or looked up.
+
+    Each line costs a document lookup and a quote, so an unbounded list is an
+    unbounded amount of work bought with one request. The paper check would
+    eventually refuse the order -- after doing all of it.
+    """
+    response = client.post(
+        "/v1/app/orders",
+        headers=auth,
+        json={
+            "kiosk_id": kiosk.public_id,
+            "payment_method": "wallet",
+            "items": [{"document_id": document.public_id}] * 500,
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_an_enormous_page_range_is_refused(client, auth, kiosk, document):
+    """A page range is split on commas before anything looks at it, so a
+    megabyte of "1," is a megabyte of tokens. The column holds 200 characters;
+    the request is refused at the same size rather than after the work."""
+    response = client.post(
+        "/v1/app/orders",
+        headers=auth,
+        json={
+            "kiosk_id": kiosk.public_id,
+            "payment_method": "wallet",
+            "items": [
+                {"document_id": document.public_id, "page_range": "1," * 5000}
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_an_ordinary_page_range_still_works(client, auth, kiosk, document):
+    response = client.post(
+        "/v1/app/orders",
+        headers=auth,
+        json={
+            "kiosk_id": kiosk.public_id,
+            "payment_method": "wallet",
+            "items": [{"document_id": document.public_id, "page_range": "1-2"}],
+        },
+    )
+
+    assert response.status_code == 201, response.text

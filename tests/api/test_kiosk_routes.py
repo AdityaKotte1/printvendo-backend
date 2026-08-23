@@ -150,13 +150,22 @@ def test_an_admin_sees_every_kiosk_through_the_same_routes(client, db_session, a
     assert sorted(k["name"] for k in response.json()) == ["Alice Shop", "Bob Shop"]
 
 
-def test_a_student_sees_no_kiosks(client, db_session):
+def test_a_student_cannot_reach_the_owner_surface_at_all(client, db_session):
+    """Refused at the door, not merely handed an empty list.
+
+    This asserted 200 with `[]` -- true, because a student's scope is empty, and
+    it leaked nothing. But the authz matrix says `/v1/owner/*` is for owners and
+    admins, and any signed-in student reaching the handler made that claim
+    untrue. The sweep in tests/authz/test_matrix_enforced.py found it; the
+    router now carries the role guard, so a route added there tomorrow inherits
+    it rather than relying on somebody remembering.
+    """
     student = _user(db_session, "student@example.com", Role.STUDENT)
     _kiosk_for(db_session, _user(db_session, "o@example.com", Role.OWNER), "A Shop")
 
     response = client.get("/v1/owner/kiosks", headers=_auth(student))
-    assert response.status_code == 200
-    assert response.json() == []
+
+    assert response.status_code == 403
 
 
 def test_kiosk_routes_require_a_token(client):

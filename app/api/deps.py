@@ -184,6 +184,33 @@ def require_role(role: Role):
     return _guard
 
 
+def require_any_role(*roles: Role):
+    """Refuse anyone holding none of `roles`.
+
+    Exists so an audience can be "an owner, or an admin acting as one" without
+    a route repeating the disjunction. Admin is a wider *scope* here rather than
+    a bypass: it gets an owner through the door, and `kiosk_scope` still decides
+    which kiosks are behind it.
+
+    Applied to a whole router rather than to each route, so a route added later
+    is guarded by existing. `/v1/owner/kiosks` and `/v1/refiller/kiosks` were
+    guarded by scope alone -- any signed-in student reached the handler and got
+    an empty list, which leaked nothing and made the authz matrix's claim about
+    them untrue. `tests/authz/test_matrix_enforced.py` found them.
+    """
+
+    def _guard(
+        user: CurrentUser,
+        db: Annotated[Session, Depends(get_db)],
+    ) -> User:
+        held = repo.roles_of(db, user.id)
+        if not held & set(roles):
+            raise Forbidden(NOT_ALLOWED)
+        return user
+
+    return _guard
+
+
 def get_kiosk_scope(
     user: CurrentUser,
     db: Annotated[Session, Depends(get_db)],

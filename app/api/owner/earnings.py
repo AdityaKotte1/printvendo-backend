@@ -22,7 +22,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
-from app.api.deps import KioskScope, get_db, require_role
+from app.api.deps import (
+    KioskScope,
+    get_db,
+    require_any_role,
+    require_role,
+)
 from app.api.schemas import (
     EarningsResponse,
     KioskEarningsResponse,
@@ -35,7 +40,11 @@ from app.modules.kiosks import repository as kiosk_repo
 from app.modules.orders import orders_at_kiosks, paid_orders_at_kiosks
 from app.modules.payments import Earnings, earnings_by_kiosk, earnings_for_kiosks
 
-router = APIRouter(prefix="/v1/owner", tags=["owner"])
+router = APIRouter(
+    prefix="/v1/owner",
+    tags=["owner"],
+    dependencies=[Depends(require_any_role(Role.OWNER, Role.ADMIN))],
+)
 
 # An export is a whole-file download built in memory, so it needs a ceiling. Ten
 # thousand rows is several years of a busy shop and a few megabytes of CSV.
