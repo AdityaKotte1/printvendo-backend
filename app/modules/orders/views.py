@@ -139,6 +139,18 @@ def view_of(db: Session, order: Order) -> OrderView:
     return _view(order, kiosks, documents)
 
 
+def order_by_public_id(db: Session, public_id: str) -> Order | None:
+    """Any order, by its public id.
+
+    Unscoped on purpose and used only by the admin surface -- a refund is issued
+    against somebody else's order by definition. Students read theirs through
+    `order_for`, which takes the user id and is the only lookup the student
+    routes may use.
+    """
+    stmt = select(Order).where(Order.public_id == public_id)
+    return db.execute(stmt).scalar_one_or_none()
+
+
 def order_for(db: Session, *, user_id: int, public_id: str) -> Order | None:
     """This student's order, or None.
 

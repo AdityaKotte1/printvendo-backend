@@ -50,6 +50,8 @@ AUDIT_MATRIX: dict[tuple[str, str], tuple[str, str]] = {
     # Buying a subscription is recorded by the subscription row and the payment
     # beside it, both of which outlive any audit retention.
     ("POST", "/v1/admin/kiosks/provision"): (AUDITED, ""),
+    # Money going back is exactly what somebody has to answer for later.
+    ("POST", "/v1/admin/orders/{order_id}/refund"): (AUDITED, ""),
     ("POST", "/v1/owner/billing/subscription"): (EXEMPT, RECORDED_ELSEWHERE),
     ("PUT", "/v1/app/kiosks/{kiosk_id}/favourite"): (EXEMPT, SELF_SERVICE),
     ("DELETE", "/v1/app/kiosks/{kiosk_id}/favourite"): (EXEMPT, SELF_SERVICE),

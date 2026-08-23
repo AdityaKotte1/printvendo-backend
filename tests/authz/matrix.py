@@ -181,6 +181,10 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     # creation: it decides which shop a machine belongs to and whose account
     # collects at it.
     ("POST", "/v1/admin/kiosks/provision"): {ADMIN},
+    # Giving money back. Admin only: an owner refunding their own takings is a
+    # separate surface and a separate decision, and a student must never be
+    # able to refund the order they placed.
+    ("POST", "/v1/admin/orders/{order_id}/refund"): {ADMIN},
     ("GET", "/v1/admin/kiosks/{kiosk_id}"): {ADMIN},
     ("POST", "/v1/admin/kiosks/{kiosk_id}/stage"): {ADMIN},
     ("PUT", "/v1/admin/kiosks/{kiosk_id}/type"): {ADMIN},

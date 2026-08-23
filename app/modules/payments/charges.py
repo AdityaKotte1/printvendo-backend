@@ -291,6 +291,22 @@ def credentials_for_payment(
     return Credentials(config.razorpay_key_id, decrypt_secret(config, box))
 
 
+def payment_for_order(db: Session, order_id: int) -> Payment | None:
+    """The payment that settled this order, whatever it was paid with.
+
+    Every paid order has exactly one, wallet included -- `pay_with_wallet`
+    writes a CAPTURED payment with `source = WALLET` in the same transaction as
+    the debit. That is what lets "how much of this has been given back" have one
+    implementation instead of one for cards and another for balance.
+    """
+    stmt = (
+        select(Payment)
+        .where(Payment.order_id == order_id, Payment.kind == PaymentKind.PRINT_ORDER)
+        .order_by(Payment.id.desc())
+    )
+    return db.execute(stmt).scalars().first()
+
+
 def payment_for_razorpay_order(db: Session, razorpay_order_id: str) -> Payment | None:
     return db.execute(
         select(Payment).where(Payment.razorpay_order_id == razorpay_order_id)

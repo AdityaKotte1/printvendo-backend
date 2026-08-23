@@ -604,6 +604,33 @@ class ProvisionedKioskResponse(BaseModel):
     enrolment_expires_at: datetime
 
 
+class RefundRequest(BaseModel):
+    """What to give back, and the key that makes retrying it safe."""
+
+    # Required, never generated server-side: a request that timed out is
+    # retried with the same key and returns the refund it already made. A key
+    # invented here would make the second attempt a second refund.
+    idempotency_key: str = Field(min_length=8, max_length=120)
+    # Omitted means everything still owed, which is the case by a wide margin.
+    amount_inr: Decimal | None = None
+    # Omitted means "back the way it came" -- balance for a wallet payment,
+    # source for a card. Only ever set to override that.
+    destination: Literal["source", "wallet"] | None = None
+    reason: str | None = Field(default=None, max_length=300)
+
+
+class RefundResponse(BaseModel):
+    id: str
+    payment_id: str
+    order_id: str
+    amount_inr: Decimal
+    destination: str
+    # Everything given back on this payment so far, this refund included, so a
+    # partial refund does not need a second call to be understood.
+    refunded_total_inr: Decimal
+    created_at: datetime
+
+
 class StageChangeRequest(BaseModel):
     stage: str
     # Why it moved, kept on the kiosk for whoever reads it next -- "waiting on
