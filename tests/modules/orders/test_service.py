@@ -556,3 +556,165 @@ def test_the_sweep_leaves_an_order_that_is_still_open(db_session, user, kiosk):
 def test_the_order_lifetime_is_long_enough_to_actually_pay(db_session):
     """A student on a phone, opening a payment app and coming back."""
     assert ORDER_LIFETIME >= timedelta(minutes=10)
+
+
+# ── an order follows its prints ─────────────────────────────────────────────
+
+
+def _funded(db_session, user, reference: str):
+    """Enough balance to pay for the orders these tests place."""
+    from app.modules.wallet import EntryKind, credit
+
+    credit(
+        db_session,
+        user_id=user.id,
+        amount=Decimal("500.00"),
+        kind=EntryKind.TOPUP,
+        reference=reference,
+    )
+
+
+def test_an_order_is_dispatched_once_a_device_takes_it(db_session, user, kiosk):
+    """`DISPATCHED`, `COMPLETED` and `PARTIALLY_FAILED` existed and nothing ever
+    set them, so an order stayed PAID for ever and the student's screen said
+    "queued" after the print was already in their hand."""
+    from app.modules.orders.service import pay_with_wallet, refresh_order_state
+    from app.modules.printing.models import TaskState
+
+    _funded(db_session, user, "progress_0")
+
+
+
+
+
+
+    order = place_order(
+        db_session,
+        user=user,
+        kiosk=kiosk,
+        requests=[request_for(make_document(db_session, user))],
+        method=PaymentMethod.WALLET,
+    )
+    pay_with_wallet(db_session, order)
+
+    task = db_session.query(PrintTask).filter_by(kiosk_id=kiosk.id).one()
+    task.state = TaskState.PRINTING
+    db_session.flush()
+
+    refresh_order_state(db_session, document_id=task.document_id, kiosk_id=kiosk.id)
+
+    assert order.state is OrderState.DISPATCHED
+
+
+def test_an_order_completes_when_every_document_has_printed(db_session, user, kiosk):
+    from app.modules.orders.service import pay_with_wallet, refresh_order_state
+    from app.modules.printing.models import TaskState
+
+    _funded(db_session, user, "progress_1")
+
+    order = place_order(
+        db_session,
+        user=user,
+        kiosk=kiosk,
+        requests=[
+            request_for(make_document(db_session, user)),
+            request_for(make_document(db_session, user)),
+        ],
+        method=PaymentMethod.WALLET,
+    )
+    pay_with_wallet(db_session, order)
+
+    tasks = db_session.query(PrintTask).filter_by(kiosk_id=kiosk.id).all()
+    for task in tasks:
+        task.state = TaskState.PRINTED
+    db_session.flush()
+
+    refresh_order_state(db_session, document_id=tasks[0].document_id, kiosk_id=kiosk.id)
+
+    assert order.state is OrderState.COMPLETED
+
+
+def test_an_order_with_one_left_to_print_is_not_complete(db_session, user, kiosk):
+    """Two files, one printed: the student is still waiting, and an order that
+    said COMPLETED would take it off their screen."""
+    from app.modules.orders.service import pay_with_wallet, refresh_order_state
+    from app.modules.printing.models import TaskState
+
+    _funded(db_session, user, "progress_2")
+
+    order = place_order(
+        db_session,
+        user=user,
+        kiosk=kiosk,
+        requests=[
+            request_for(make_document(db_session, user)),
+            request_for(make_document(db_session, user)),
+        ],
+        method=PaymentMethod.WALLET,
+    )
+    pay_with_wallet(db_session, order)
+
+    tasks = db_session.query(PrintTask).filter_by(kiosk_id=kiosk.id).all()
+    tasks[0].state = TaskState.PRINTED
+    db_session.flush()
+
+    refresh_order_state(db_session, document_id=tasks[0].document_id, kiosk_id=kiosk.id)
+
+    assert order.state is OrderState.DISPATCHED
+
+
+def test_some_printed_and_some_failed_is_partially_failed(db_session, user, kiosk):
+    """A real outcome rather than an error: the student is owed the difference,
+    and an operator has to be able to see which orders those are."""
+    from app.modules.orders.service import pay_with_wallet, refresh_order_state
+    from app.modules.printing.models import TaskState
+
+    _funded(db_session, user, "progress_3")
+
+    order = place_order(
+        db_session,
+        user=user,
+        kiosk=kiosk,
+        requests=[
+            request_for(make_document(db_session, user)),
+            request_for(make_document(db_session, user)),
+        ],
+        method=PaymentMethod.WALLET,
+    )
+    pay_with_wallet(db_session, order)
+
+    tasks = db_session.query(PrintTask).filter_by(kiosk_id=kiosk.id).all()
+    tasks[0].state = TaskState.PRINTED
+    tasks[1].state = TaskState.FAILED
+    db_session.flush()
+
+    refresh_order_state(db_session, document_id=tasks[0].document_id, kiosk_id=kiosk.id)
+
+    assert order.state is OrderState.PARTIALLY_FAILED
+
+
+def test_a_refunded_order_is_left_alone(db_session, user, kiosk):
+    """A late report from a device must not resurrect an order somebody has
+    already been given their money back for."""
+    from app.modules.orders.service import pay_with_wallet, refresh_order_state
+    from app.modules.printing.models import TaskState
+
+    _funded(db_session, user, "progress_4")
+
+    order = place_order(
+        db_session,
+        user=user,
+        kiosk=kiosk,
+        requests=[request_for(make_document(db_session, user))],
+        method=PaymentMethod.WALLET,
+    )
+    pay_with_wallet(db_session, order)
+    order.state = OrderState.REFUNDED
+    db_session.flush()
+
+    task = db_session.query(PrintTask).filter_by(kiosk_id=kiosk.id).one()
+    task.state = TaskState.PRINTED
+    db_session.flush()
+    refresh_order_state(db_session, document_id=task.document_id, kiosk_id=kiosk.id)
+
+    assert order.state is OrderState.REFUNDED

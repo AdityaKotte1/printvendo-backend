@@ -16,12 +16,19 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session
 
-from app.api.deps import CurrentDevice, KioskPaperLedger, get_db, get_document_store
+from app.api.deps import (
+    CurrentDevice,
+    KioskPaperLedger,
+    get_db,
+    get_document_store,
+    get_task_outcome,  # noqa: F401
+)
 from app.api.schemas import DeviceTaskResponse, DeviceTaskStatusRequest
 from app.core.errors import BadRequest, Conflict, NotFound
 from app.modules.kiosks import repository as kiosk_repo
 from app.modules.printing import (
     DocumentStore,
+    TaskOutcome,  # noqa: F401
     TaskState,
     claim_next_task,
     printable_key,
@@ -128,12 +135,19 @@ def report_status(
     payload: DeviceTaskStatusRequest,
     device: CurrentDevice,
     db: Annotated[Session, Depends(get_db)],
+    outcome: Annotated[TaskOutcome, Depends(get_task_outcome)],
 ) -> DeviceTaskResponse:
     """What happened to a job.
 
     Paper is deducted here, from what the printer says it used. The ledger is
     built around this device's kiosk, so a report can only ever debit the tray
     that printed.
+
+    A finished task -- printed or failed -- moves the order behind it along,
+    through a seam wired at the composition root. Without that the order's own
+    `DISPATCHED`, `COMPLETED` and `PARTIALLY_FAILED` states existed and nothing
+    ever set them, so a student's screen said "queued" after the print was in
+    their hand.
     """
     task = printing_repo.task_for_kiosk(
         db, kiosk_id=device.kiosk_id, public_id=task_id
@@ -145,7 +159,9 @@ def report_status(
     if state is TaskState.PRINTING:
         start_printing(db, task)
     elif state is TaskState.PRINTED:
-        report_printed(db, task, ledger, sheets_used=payload.sheets_used)
+        report_printed(
+            db, task, ledger, sheets_used=payload.sheets_used, outcome=outcome
+        )
     elif state is TaskState.FAILED:
         report_failed(
             db,
@@ -154,6 +170,7 @@ def report_status(
             sheets_used=payload.sheets_used,
             error_code=payload.error_code,
             error_message=payload.error_message,
+            outcome=outcome,
         )
     else:
         report_blocked(

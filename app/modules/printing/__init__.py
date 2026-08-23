@@ -51,6 +51,7 @@ from app.modules.printing.photos import PhotoLayout, parse_layout, render_layout
 from app.modules.printing.storage import DocumentStore, StorageArea
 from app.modules.printing.tasks import (
     PaperLedger,
+    TaskOutcome,
     report_blocked,
     report_failed,
     report_printed,
@@ -86,6 +87,7 @@ __all__ = [
     "parse_page_range",
     "printable_key",
     "DocumentUse",
+    "TaskOutcome",
     "purge_expired_files",
     "queue_depth",
     "renew_lease",

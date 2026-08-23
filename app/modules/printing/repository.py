@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import NotFound
 from app.core.ids import IdPrefix, InvalidId, parse_id
-from app.modules.printing.models import Document, PrintTask
+from app.modules.printing.models import Document, PrintTask, TaskState
 
 NO_SUCH_TASK = "That print job does not exist."
 NO_SUCH_DOCUMENT = "That document does not exist."
@@ -81,3 +81,23 @@ def documents_of_user(
             .limit(limit)
         ).scalars()
     )
+
+
+def task_states_at(
+    db: Session, *, document_ids: list[int], kiosk_id: int
+) -> list[TaskState]:
+    """What became of the tasks for these documents at this kiosk.
+
+    Asked by orders, which owns the question "is this whole order finished" and
+    cannot answer it without knowing how each print went. States rather than
+    tasks: orders has no business with a `PrintTask`, and returning one would
+    invite it to start reading columns that are not its own.
+    """
+    if not document_ids:
+        return []
+
+    stmt = select(PrintTask.state).where(
+        PrintTask.document_id.in_(document_ids),
+        PrintTask.kiosk_id == kiosk_id,
+    )
+    return [TaskState(state) for state in db.execute(stmt).scalars()]

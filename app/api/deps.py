@@ -40,6 +40,7 @@ from app.modules.ops import AlertSeverity, raise_alert
 from app.modules.orders import (
     apply_payment_refund,
     document_is_in_an_order,
+    refresh_order_state,
     settle_paid_order,
 )
 from app.modules.payments import (
@@ -51,7 +52,7 @@ from app.modules.payments import (
     Settlement,
 )
 from app.modules.payments.gate import GateBilling
-from app.modules.printing import DocumentStore, DocumentUse
+from app.modules.printing import DocumentStore, DocumentUse, TaskOutcome
 from app.modules.wallet import EntryKind, credit
 
 logger = logging.getLogger(__name__)
@@ -263,6 +264,23 @@ class OrderedDocuments:
 
     def is_referenced(self, db: Session, document_id: int) -> bool:
         return document_is_in_an_order(db, document_id)
+
+
+class OrderProgress:
+    """Tells the order behind a task that the task has finished.
+
+    The adapter lives here for the reason `KioskPaperLedger` does: printing
+    declares what it needs (`TaskOutcome`), orders knows what a finished print
+    means for an order, and neither imports the other.
+    """
+
+    def task_finished(self, db: Session, task) -> None:
+        refresh_order_state(db, document_id=task.document_id, kiosk_id=task.kiosk_id)
+
+
+def get_task_outcome() -> TaskOutcome:
+    """What a finished print means for whatever paid for it."""
+    return OrderProgress()
 
 
 def get_document_use() -> DocumentUse:

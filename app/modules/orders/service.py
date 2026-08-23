@@ -36,8 +36,16 @@ from app.modules.orders.models import (
 from app.modules.orders.quotes import OrderQuote, quote_line
 from app.modules.payments import PaymentKind, record_wallet_payment
 from app.modules.payments.gate import Gateway, kiosk_payment_gate, wallet_may_be_spent
-from app.modules.printing import Document, DocumentState, PrintOptions, PrintTask
+from app.modules.printing import (
+    TERMINAL_TASK_STATES,
+    Document,
+    DocumentState,
+    PrintOptions,
+    PrintTask,
+    TaskState,
+)
 from app.modules.printing.enqueue import committed_sheets, enqueue_task
+from app.modules.printing.repository import task_states_at
 from app.modules.wallet.ledger import debit
 
 # Long enough for a student to open a payment app, authenticate and come back;
@@ -331,6 +339,58 @@ def settle_paid_order(
         return []
 
     return mark_paid(db, order, reference=reference, now=now)
+
+
+# ── how an order follows its prints ─────────────────────────────────────────
+
+
+def refresh_order_state(db: Session, *, document_id: int, kiosk_id: int) -> Order | None:
+    """Move an order along, now that one of its prints has changed.
+
+    `DISPATCHED`, `COMPLETED` and `PARTIALLY_FAILED` existed from the start and
+    **nothing ever set them**: an order stayed PAID for ever, so a student's
+    screen said "queued" while the paper was already in their hand.
+
+    Orders owns this question because only orders knows what a whole order is.
+    Printing owns the tasks and cannot import orders, so the news arrives
+    through a seam wired at the composition root -- the same shape as the paper
+    ledger and the refund sink.
+
+    An order that has settled is left alone. A device reporting late must not
+    resurrect one somebody has already been refunded for.
+    """
+    item = db.execute(
+        select(OrderItem).where(OrderItem.document_id == document_id)
+    ).scalars().first()
+    if item is None:
+        return None
+
+    order = db.get(Order, item.order_id)
+    if order is None or order.kiosk_id != kiosk_id:
+        return None
+    if order.state not in (OrderState.PAID, OrderState.DISPATCHED):
+        return None
+
+    documents = [i.document_id for i in order.items if i.document_id is not None]
+    states = task_states_at(db, document_ids=documents, kiosk_id=kiosk_id)
+    if not states:
+        return order
+
+    unfinished = [s for s in states if s not in TERMINAL_TASK_STATES]
+    if unfinished:
+        # At least one machine has it, and at least one has not finished.
+        order.state = OrderState.DISPATCHED
+    elif all(s is TaskState.PRINTED for s in states):
+        order.state = OrderState.COMPLETED
+    else:
+        # Some came out and some did not. A real outcome, not an error: the
+        # student is owed the difference and an operator has to be able to find
+        # these.
+        order.state = OrderState.PARTIALLY_FAILED
+
+    db.add(order)
+    db.flush()
+    return order
 
 
 # ── expiry ──────────────────────────────────────────────────────────────────

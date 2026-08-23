@@ -34,6 +34,7 @@ from app.modules.orders.service import (
     mark_paid,
     pay_with_wallet,
     place_order,
+    refresh_order_state,
     settle_paid_order,
     sheets_available,
 )
@@ -77,6 +78,7 @@ __all__ = [
     "mark_paid",
     "pay_with_wallet",
     "place_order",
+    "refresh_order_state",
     "settle_paid_order",
     "quote_line",
     "sheets_available",

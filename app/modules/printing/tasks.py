@@ -77,12 +77,34 @@ def start_printing(
     return task
 
 
+class TaskOutcome(Protocol):
+    """What finishing a print means to whoever bought it.
+
+    Printing owns the task and must not import orders, so "this order is
+    finished now" arrives through here, wired at the composition root -- the
+    same seam as `PaperLedger`. Without it the order's own states existed and
+    nothing ever set them: a student's screen said "queued" while the paper was
+    already in their hand.
+    """
+
+    def task_finished(self, db: Session, task: PrintTask) -> None: ...
+
+
+class NoOutcome:
+    """For callers with no order behind the task. Explicit rather than a
+    default argument, so nobody skips the seam without saying so."""
+
+    def task_finished(self, db: Session, task: PrintTask) -> None:
+        return None
+
+
 def report_printed(
     db: Session,
     task: PrintTask,
     ledger: PaperLedger,
     *,
     sheets_used: int | None,
+    outcome: TaskOutcome | None = None,
     now: datetime | None = None,
 ) -> PrintTask:
     """It came out of the printer.
@@ -108,6 +130,8 @@ def report_printed(
         actual_sheets=sheets_used,
         reference=task.public_id,
     )
+
+    (outcome or NoOutcome()).task_finished(db, task)
     return task
 
 
@@ -119,6 +143,7 @@ def report_failed(
     sheets_used: int | None,
     error_code: str | None = None,
     error_message: str | None = None,
+    outcome: TaskOutcome | None = None,
     now: datetime | None = None,
 ) -> PrintTask:
     """It did not come out, or only part of it did.
@@ -150,6 +175,11 @@ def report_failed(
         actual_sheets=consumed,
         reference=task.public_id,
     )
+
+    # A failure finishes the task as surely as a success does, and the order
+    # behind it has to hear about both -- half an order printed is a real
+    # outcome the student is owed the difference on.
+    (outcome or NoOutcome()).task_finished(db, task)
     return task
 
 
