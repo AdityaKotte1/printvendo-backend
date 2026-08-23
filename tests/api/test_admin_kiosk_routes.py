@@ -450,3 +450,101 @@ def test_provisioning_is_admin_only(client, owner_auth):
     )
 
     assert response.status_code == 403
+
+
+# -- putting it on the map --------------------------------------------------
+
+
+def test_a_kiosk_can_be_placed_on_the_map_after_it_exists(client, admin_auth):
+    """Coordinates could only be given at creation, and a kiosk created without
+    them could never be moved -- so a shop that was set up before anybody
+    thought to look it up stayed permanently unplaced, and the student app's
+    "nearby" tab silently could not rank it."""
+    kiosk_id = _create(client, admin_auth).json()["id"]
+
+    placed = client.put(
+        f"{KIOSKS}/{kiosk_id}/location",
+        headers=admin_auth,
+        json={"latitude": 12.9716, "longitude": 77.5946},
+    )
+
+    assert placed.status_code == 200
+    assert placed.json()["latitude"] == pytest.approx(12.9716)
+    assert placed.json()["longitude"] == pytest.approx(77.5946)
+
+
+def test_a_placed_kiosk_carries_its_position_to_students(client, admin_auth):
+    """The point of setting it. A kiosk the student app cannot place is one it
+    cannot sort by distance or draw on the map."""
+    kiosk_id = _create(client, admin_auth).json()["id"]
+    client.put(
+        f"{KIOSKS}/{kiosk_id}/location",
+        headers=admin_auth,
+        json={"latitude": 12.9716, "longitude": 77.5946, "description": "Gate 3"},
+    )
+
+    listed = client.get(f"{KIOSKS}/{kiosk_id}", headers=admin_auth).json()
+
+    assert listed["latitude"] == pytest.approx(12.9716)
+    assert listed["location_description"] == "Gate 3"
+
+
+def test_half_a_position_is_refused(client, admin_auth):
+    """A kiosk with a latitude and no longitude cannot be drawn anywhere, and
+    would drop out of every distance ranking without saying why."""
+    kiosk_id = _create(client, admin_auth).json()["id"]
+
+    refused = client.put(
+        f"{KIOSKS}/{kiosk_id}/location", headers=admin_auth, json={"latitude": 12.97}
+    )
+
+    assert refused.status_code == 400
+
+
+def test_a_position_that_is_not_on_earth_is_refused(client, admin_auth):
+    kiosk_id = _create(client, admin_auth).json()["id"]
+
+    refused = client.put(
+        f"{KIOSKS}/{kiosk_id}/location",
+        headers=admin_auth,
+        json={"latitude": 91, "longitude": 77.5946},
+    )
+
+    assert refused.status_code == 400
+
+
+def test_a_description_alone_moves_nothing(client, admin_auth):
+    """Renaming where a shop is must not quietly unplace it."""
+    kiosk_id = _create(client, admin_auth).json()["id"]
+    client.put(
+        f"{KIOSKS}/{kiosk_id}/location",
+        headers=admin_auth,
+        json={"latitude": 12.9716, "longitude": 77.5946},
+    )
+
+    client.put(
+        f"{KIOSKS}/{kiosk_id}/location",
+        headers=admin_auth,
+        json={"description": "Now by the lift"},
+    )
+
+    kiosk = client.get(f"{KIOSKS}/{kiosk_id}", headers=admin_auth).json()
+    assert kiosk["latitude"] == pytest.approx(12.9716)
+    assert kiosk["location_description"] == "Now by the lift"
+
+
+def test_moving_a_kiosk_is_audited(client, admin_auth, admin, db_session):
+    """Where a shop claims to be decides which students walk to it."""
+    kiosk_id = _create(client, admin_auth).json()["id"]
+
+    client.put(
+        f"{KIOSKS}/{kiosk_id}/location",
+        headers=admin_auth,
+        json={"latitude": 12.9716, "longitude": 77.5946},
+    )
+
+    actions = [
+        e.action
+        for e in entries_for(db_session, entity_type="kiosk", entity_id=kiosk_id)
+    ]
+    assert "kiosk.location.set" in actions

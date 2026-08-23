@@ -547,6 +547,12 @@ class AdminKioskResponse(BaseModel):
     is_selling: bool
     accepts_wallet: bool
     location_description: str | None
+    # Where it is. Carried on the admin view because whoever placed a shop is
+    # the only person who can tell that it was placed wrongly -- a kiosk on the
+    # wrong side of campus looks exactly like a correct one until a student
+    # walks to it.
+    latitude: float | None
+    longitude: float | None
     owner_id: str | None
     owner_email: str | None
     paper: PaperResponse
@@ -562,6 +568,20 @@ class CreateKioskRequest(BaseModel):
     latitude: float | None = None
     longitude: float | None = None
     paper_capacity: int | None = None
+
+
+class KioskLocationRequest(BaseModel):
+    """Where a kiosk is, set after it exists.
+
+    Latitude and longitude are optional *together*: a request with one and not
+    the other is refused rather than half-applied, because a kiosk with a
+    latitude alone cannot be drawn and drops out of every distance ranking
+    without saying why. Sending only a description moves nothing.
+    """
+
+    latitude: float | None = None
+    longitude: float | None = None
+    description: str | None = None
 
 
 class ProvisionKioskRequest(BaseModel):

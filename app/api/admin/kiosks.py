@@ -39,6 +39,7 @@ from app.api.schemas import (
     AdminKioskResponse,
     CreateKioskRequest,
     InviteOwnerRequest,
+    KioskLocationRequest,
     KioskTypeChangeRequest,
     PaperResponse,
     ProvisionedKioskResponse,
@@ -62,6 +63,7 @@ from app.modules.kiosks import (
     invite_staff,
     is_selling,
     move_to,
+    set_location,
     sheets_remaining,
 )
 from app.modules.kiosks import repository as kiosk_repo
@@ -88,6 +90,8 @@ def _as_response(db: Session, kiosk: Kiosk) -> AdminKioskResponse:
         is_selling=is_selling(kiosk),
         accepts_wallet=kiosk.accepts_wallet,
         location_description=kiosk.location_description,
+        latitude=kiosk.latitude,
+        longitude=kiosk.longitude,
         owner_id=owner.public_id if owner else None,
         owner_email=owner.email if owner else None,
         paper=PaperResponse(
@@ -299,6 +303,56 @@ def set_type(
         after={
             "kiosk_type": KioskType(kiosk.kiosk_type).value,
             "onboarding_stage": OnboardingStage(kiosk.onboarding_stage).value,
+        },
+    )
+    return _as_response(db, kiosk)
+
+
+@router.put("/{kiosk_id}/location", response_model=AdminKioskResponse)
+def place_kiosk(
+    kiosk_id: str,
+    body: KioskLocationRequest,
+    admin: CurrentAdmin,
+    scope: KioskScope,
+    db: Annotated[Session, Depends(get_db)],
+) -> AdminKioskResponse:
+    """Put a kiosk on the map, or move it.
+
+    Coordinates could previously only be given when the kiosk was created, so a
+    shop set up before anybody looked its position up stayed unplaced for ever
+    -- and an unplaced shop cannot be sorted by distance or drawn on the
+    student app's map, which is most of what that screen is.
+
+    Not an owner route. Where a shop claims to be decides which students walk
+    to it, and a kiosk placed on top of a busier one is a claim about somebody
+    else's trade.
+    """
+    kiosk = kiosk_repo.get_kiosk(db, scope, kiosk_id)
+    before = {
+        "latitude": kiosk.latitude,
+        "longitude": kiosk.longitude,
+        "location_description": kiosk.location_description,
+    }
+
+    set_location(
+        db,
+        kiosk,
+        description=body.description,
+        latitude=body.latitude,
+        longitude=body.longitude,
+    )
+
+    audit.record(
+        db,
+        action="kiosk.location.set",
+        entity_type="kiosk",
+        entity_id=kiosk.public_id,
+        actor_user_id=admin.id,
+        before=before,
+        after={
+            "latitude": kiosk.latitude,
+            "longitude": kiosk.longitude,
+            "location_description": kiosk.location_description,
         },
     )
     return _as_response(db, kiosk)

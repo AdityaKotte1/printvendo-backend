@@ -16,7 +16,8 @@ from app.core.db import session_scope
 from app.core.errors import AppError, Conflict
 from app.modules.identity import repository as identity_repo
 from app.modules.identity.roles import Role
-from app.modules.kiosks import KioskType
+from app.modules.kiosks import KioskType, set_location, system_scope
+from app.modules.kiosks import repository as kiosk_repo
 from app.provisioning import provision_kiosk
 
 
@@ -64,6 +65,15 @@ def main(argv: list[str] | None = None) -> int:
     kiosk.add_argument("--longitude", type=float, default=None)
     kiosk.add_argument("--paper", type=int, default=None, help="tray size in sheets")
 
+    place = commands.add_parser(
+        "place-kiosk",
+        help="put an existing kiosk on the map, so the app can sort by distance",
+    )
+    place.add_argument("--kiosk", required=True, help="its public id, ksk_...")
+    place.add_argument("--latitude", type=float, required=True)
+    place.add_argument("--longitude", type=float, required=True)
+    place.add_argument("--location", default=None, help="what a student would look for")
+
     args = parser.parse_args(argv)
     settings = get_settings()
 
@@ -108,6 +118,24 @@ def main(argv: list[str] | None = None) -> int:
                     owner_email=args.owner_email,
                 )
                 _report_kiosk(result, settings)
+                return 0
+
+            if args.command == "place-kiosk":
+                # Through the same service the route calls, so the same
+                # half-a-position and off-the-earth refusals apply. A second
+                # way to write coordinates is a second set of rules to keep.
+                kiosk = kiosk_repo.get_kiosk(db, system_scope(), args.kiosk)
+                set_location(
+                    db,
+                    kiosk,
+                    description=args.location,
+                    latitude=args.latitude,
+                    longitude=args.longitude,
+                )
+                print(f"{kiosk.name}  {kiosk.public_id}")
+                print(f"  {kiosk.latitude}, {kiosk.longitude}")
+                if kiosk.location_description:
+                    print(f"  {kiosk.location_description}")
                 return 0
 
             world = seed_demo(db, settings, name=args.name)
