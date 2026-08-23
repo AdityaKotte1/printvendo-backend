@@ -35,6 +35,12 @@ from app.modules.billing.plans import (
     plan_by_public_id,
     update_plan,
 )
+from app.modules.billing.purchase import (
+    DAYS_PER_MONTH,
+    GRACE_DAYS,
+    activate_subscription,
+    start_purchase,
+)
 from app.modules.billing.quotes import ALLOWED_DURATIONS, Quote, quote_subscription
 from app.modules.billing.subscriptions import (
     active_subscription,
@@ -64,6 +70,9 @@ __all__ = [
     "is_on_trial",
     "price_band_for",
     "ALLOWED_DURATIONS",
+    "DAYS_PER_MONTH",
+    "GRACE_DAYS",
+    "activate_subscription",
     "active_plans",
     "all_plans",
     "clear_owner_discount",
@@ -76,6 +85,7 @@ __all__ = [
     "set_negotiated_price",
     "set_owner_discount",
     "set_plan_discount",
+    "start_purchase",
     "subscriptions_of",
     "update_plan",
     "quote_subscription",

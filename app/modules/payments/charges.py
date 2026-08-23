@@ -169,6 +169,7 @@ def open_checkout(
     gateway: Gateway,
     collecting_user_id: int | None = None,
     order_id: int | None = None,
+    subscription_id: int | None = None,
 ) -> Payment:
     """Open a Razorpay order and record our side of it.
 
@@ -191,6 +192,7 @@ def open_checkout(
         user_id=user_id,
         kind=kind,
         order_id=order_id,
+        subscription_id=subscription_id,
         kiosk_id=kiosk.id if kiosk is not None else None,
         source=PaymentSource(gateway.value),
         collecting_user_id=collecting_user_id,

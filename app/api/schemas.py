@@ -607,6 +607,62 @@ class PlanResponse(BaseModel):
     discounts: list[PlanDiscountResponse]
 
 
+class MySubscriptionResponse(BaseModel):
+    """One subscription, as **its own owner** sees it.
+
+    Distinct from `SubscriptionResponse`, which is the admin's view of somebody
+    else's: that one carries the negotiated price and the plan an admin set, and
+    an owner reading their own does not need to be told what they negotiated in
+    a field they cannot change. Two audiences, two types, so neither grows the
+    other's fields by accident.
+    """
+
+    id: str
+    status: str
+    duration_months: int
+    monthly_price_charged: Decimal
+    total_amount: Decimal
+    on_trial: bool
+    free_until: datetime | None
+    starts_at: datetime | None
+    expires_at: datetime | None
+    # The day the shop stops collecting if nothing is done -- trial, paid term
+    # or grace, whichever runs longest. The one date an owner actually acts on.
+    covered_until: datetime | None
+
+
+class MyBillingResponse(BaseModel):
+    """What an owner sees about their own billing.
+
+    Named apart from `OwnerBillingResponse`, which is the *admin* view of an
+    owner's billing and carries their id, address and discount ladder. Two
+    audiences, two types, and neither can grow the other's fields by accident.
+    """
+
+    subscription: MySubscriptionResponse | None
+    plans: list[PlanResponse]
+
+
+class SubscriptionQuoteResponse(BaseModel):
+    """A price and every input that produced it.
+
+    The breakdown rather than a total, because an owner disputing a charge
+    deserves to see which rate and which discount applied.
+    """
+
+    plan_id: str
+    plan_name: str
+    duration_months: int
+    monthly_price: Decimal
+    discount_percent: Decimal
+    total: Decimal
+
+
+class StartSubscriptionRequest(BaseModel):
+    plan_id: str
+    duration_months: int
+
+
 class CreatePlanRequest(BaseModel):
     name: str
     monthly_price: Decimal

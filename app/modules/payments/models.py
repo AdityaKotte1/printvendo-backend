@@ -233,6 +233,13 @@ class Payment(Base):
     order_id: Mapped[int | None] = mapped_column(
         ForeignKey("orders.id", ondelete="RESTRICT"), nullable=True, index=True
     )
+    # Set for SUBSCRIPTION only, and the sibling of `order_id` above: what this
+    # payment bought. Referenced by table name rather than by importing billing,
+    # exactly as `order_id` references orders -- the column is a foreign key,
+    # not a dependency between two contexts.
+    subscription_id: Mapped[int | None] = mapped_column(
+        ForeignKey("subscriptions.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
     # Which kiosk's arrangement collected this, for reconciliation and refunds.
     kiosk_id: Mapped[int | None] = mapped_column(
         ForeignKey("kiosks.id", ondelete="RESTRICT"), nullable=True, index=True

@@ -104,6 +104,13 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     # configuring their own payment keys, which is not a thing an admin does --
     # reviewing somebody else's change request is an admin action and belongs
     # to the admin surface, where the owner is named explicitly.
+    # An owner's own subscription, and buying one. Admin is included because
+    # admin is a wider scope rather than a separate router -- but note an admin
+    # buying here buys it for *themselves*, not on somebody's behalf; granting
+    # is what the admin surface is for.
+    ("GET", "/v1/owner/billing"): {OWNER, ADMIN},
+    ("GET", "/v1/owner/billing/quote"): {OWNER, ADMIN},
+    ("POST", "/v1/owner/billing/subscription"): {OWNER, ADMIN},
     ("GET", "/v1/owner/payment-config"): {OWNER},
     ("PUT", "/v1/owner/payment-config/keys"): {OWNER},
     ("PUT", "/v1/owner/payment-config/webhook-secret"): {OWNER},

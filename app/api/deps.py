@@ -20,7 +20,7 @@ from app.core.db import get_session_factory
 from app.core.errors import Forbidden, Unauthorized
 from app.core.notifier import BrevoNotifier, LoggingNotifier, Notifier
 from app.core.security import TokenError, TokenType, decode_token
-from app.modules.billing import price_band_for
+from app.modules.billing import Subscription, activate_subscription, price_band_for
 from app.modules.identity import User
 from app.modules.identity import repository as repo
 from app.modules.identity.roles import Role
@@ -419,14 +419,38 @@ class WebhookSettlement:
         )
 
     def settle_subscription(self, db: Session, payment: Payment) -> None:
-        # Unreachable today: nothing can open a SUBSCRIPTION checkout, because
-        # billing has no purchase route yet. Recorded loudly rather than passed
-        # over, so that adding the route without also adding activation shows up
-        # as a logged error against real money instead of silence.
-        logger.error(
-            "subscription payment %s captured with nothing to activate",
-            payment.public_id,
-        )
+        """Put the subscription this payment bought in force.
+
+        The link is `payment.subscription_id`, written when the checkout opened
+        -- the same shape as `order_id` for a print. Re-deriving it from the
+        payer would be wrong the first time an admin buys on somebody's behalf.
+
+        Idempotent, because it has to be: the webhook and the browser coming
+        back settle the same payment, and `activate_subscription` returns an
+        already-active subscription untouched rather than extending its term a
+        second time.
+
+        A payment with nothing attached is logged rather than raised. The money
+        has arrived and is recorded; what it was for is a question for a person,
+        and throwing here would make Razorpay retry a delivery that will never
+        succeed.
+        """
+        if payment.subscription_id is None:
+            logger.error(
+                "subscription payment %s captured with nothing to activate",
+                payment.public_id,
+            )
+            return
+
+        subscription = db.get(Subscription, payment.subscription_id)
+        if subscription is None:
+            logger.error(
+                "subscription payment %s names a subscription that does not exist",
+                payment.public_id,
+            )
+            return
+
+        activate_subscription(db, subscription)
 
 
 def get_settlement() -> Settlement:
