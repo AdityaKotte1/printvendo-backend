@@ -4,7 +4,7 @@ Read `CLAUDE.md` first — it carries the conventions and the state of play, and
 it is loaded automatically. This file carries only what CLAUDE.md does not: the
 exact point work stopped, and the traps that cost time.
 
-**Last updated: 2026-08-22, at commit `02107ab`.**
+**Last updated: 2026-08-23, at commit `5de50c4`.**
 
 Update this file at the end of a session. Delete anything that has become true
 in CLAUDE.md — two documents describing the same thing is how they drift.
@@ -14,155 +14,157 @@ in CLAUDE.md — two documents describing the same thing is how they drift.
 ## Where things stand
 
 ```
-1406 tests passing · 12 import contracts · ruff clean · 97 routes (29 admin)
+1544 tests passing · 12 import contracts · ruff clean · 105 routes (31 admin)
 ```
 
 Verify before trusting that line:
 
 ```bash
-.venv/Scripts/python -m pytest -q && .venv/Scripts/lint-imports && .venv/Scripts/python -m ruff check .
+.venv/Scripts/python -m pytest -q
+PYTHONIOENCODING=utf-8 .venv/Scripts/lint-imports    # see the traps
+.venv/Scripts/python -m ruff check .
 ```
 
-**Done:** core, identity, kiosks, payments, billing, printing, orders, wallet,
-ops, every api layer including admin, the **device socket**, and — this session
-— **Phase 1, the backend's last wiring**: rate limits, a `/health` that asks the
-database, the scheduler and its four sweeps, the first `raise_alert` callers,
-and the owner orders CSV.
+**The backend is feature-complete for a pilot.** Every audience has a working
+surface, money can be taken *and given back*, an owner-collecting shop can pay
+to stay open, and a kiosk can be stood up in one command.
 
-**Next, in dependency order:** migration → agent → cutover. The migration's
-three blocking decisions are answered; it is waiting on a production dump, not
-on a decision.
+**printvendo-web now talks to this backend**, not the legacy one. It is the
+only frontend that does.
 
 ---
 
 ## Start here
 
-**The migration reader**, written against the legacy *schema* and tested on
-synthetic data. The three decisions that used to block it are answered; what is
-missing now is the production rows, and they arrive later.
+**The Pi and Windows agents, unified, against `/v1/device/*`.** This is the
+next thing, and the reasoning matters:
 
-### What changed, and why it matters
+- `pi-agent/agent.py` **already contains the Windows code** —
+  `print_file_via_win32print`, `_build_ghostscript_command`,
+  `_wait_for_windows_print_job`, dispatched by `print_file_and_wait` beside the
+  CUPS path. It is not Linux-only.
+- `windows-agent (1)/windows-agent/` is a **second implementation** and has
+  drifted: registration is a different code path, and its loop fetches one job
+  per printer per pass, which is where "only the first of several jobs prints"
+  comes from. The operator reports the Pi agent applies options correctly and
+  the Windows one does not.
+- Both still speak the **legacy** API, so a rewrite is required regardless.
 
-**The local `printit_legacy` restore is gone.** Verified 2026-08-22: that
-database exists, as do `printhub`, `printvending` and `smartprint`, and every one
-of them has **zero tables**. Do not go looking for it, and do not trust any
-figure in the data audit — kiosk 35, the ten duplicate pairs, the ~4,000
-abandoned checkouts are all illustrative now.
+So: one agent, both platforms, new contract. Delete `windows-agent/` rather
+than fixing it — two implementations of claiming is how one of them ends up
+handing the same job to two devices.
 
-**The operator will hand over a fresh dump** taken while production is in
-maintenance. Ask for `pg_dump` with schema *and* data, so the plan step can
-refuse a column-type mismatch loudly instead of coercing it.
+What it must learn: `X-Device-Token`, `POST /v1/device/tasks/next` (one task
+per call, `FOR UPDATE SKIP LOCKED`), `GET /v1/device/tasks/{id}/file`,
+`POST /v1/device/tasks/{id}/status` reporting `sheets_printed`, and
+`/v1/device/ws` where `{"type": "wake"}` means *ask now* — the socket carries a
+wake, never work. Polling stays the fallback and must keep working.
 
-**So the schema comes from `cloud-backend/app/models/`** — the running
-production backend's own SQLAlchemy models. That is authoritative and closer to
-production than a dump would be. Build the reader against those and test the
-whole migration on a synthetic legacy database created from them inside
-`printvendo_test`. When the dump lands, the same code points at a real database.
+**Claim in a loop until empty**, not once per pass. That is the multi-job bug.
 
-### The rules, already decided
+### After the agent
 
-Recorded in full at the end of
-`docs/superpowers/specs/2026-08-15-legacy-data-audit.md`. In short:
+In the order agreed with the operator: **deploy** (blocked on server, DNS,
+Brevo, production Razorpay keys), then **push notifications**, then the **paper
+shop**. Then migration rehearsals and the consoles.
 
-- **Kiosks are created through `create_kiosk`, never copied**, and climb the
-  onboarding ladder — so the payment gate still stands between a SOLD kiosk and
-  LIVE. Each records `legacy_id` (`ba3b162`), which is how orders and payments
-  find their kiosk. **The run fails if any legacy kiosk that took a payment is
-  unmapped**; a silently smaller revenue total is the one outcome this must not
-  have.
-- **An ownerless SOLD kiosk is created as PLATFORM** and reported.
-- **Case-colliding accounts merge onto the oldest**, balances summed, every
-  merge itemised.
-- **Test and duplicate kiosks are not a list in code.** The plan step generates
-  the candidates from the fresh dump for the operator to confirm; anything that
-  took a real payment is imported whatever it is called.
+---
 
-### Shape
+## What was done this session
 
-**Plan, then apply.** Read, print what would be created, mapped, merged and
-quarantined with row counts and wallet/revenue totals, get approval, then apply
-in one transaction and refuse to finish if the totals disagree.
+Roughly in order, all committed:
 
-### If you would rather not start there
-
-The phase plan agreed with the operator runs: **1 backend finishing** (done),
-**2 deploy**, **3 Pi agent**, **4 student app**, **5 migration rehearsal**,
-**6 cutover**, **7 the remaining consoles**. Phases 2 and 5 need something from
-the operator — server access, DNS, a Brevo key, production Razorpay keys, and a
-fresh dump — so the unblocked work is:
-
-- the **agent rewrite** (the Pi must learn `/v1/device/ws`, treat
-  `{"type": "wake"}` as "ask now", and keep polling as the fallback);
-- the **migration reader** above, on synthetic data;
-- the **student app's `lib/api.ts`**, which still calls the legacy contract —
-  see Frontends below and
-  `docs/superpowers/specs/2026-08-22-student-app-api-gap.md`, which maps every
-  call the app makes onto this backend and lists what has no home on either
-  side. Its first item is small and overdue: the app has no
-  `/verify-email`, `/reset-password` or `/accept-invite` page, and since
-  `38c15be` those emails are really being sent.
+- **rate limiting** at the edge, `/health` that touches the database, the
+  **scheduler** and its four sweeps, the first `raise_alert` callers, owner
+  orders CSV;
+- **`app/cli/`** — `bootstrap-admin`, `seed`, and now `provision-kiosk`;
+- **printvendo-web rewritten** onto `/v1/app/*`: the two-call wallet hold
+  collapsed into one order, photo layout working again, receipts, delete on the
+  card, the three token pages, change-password, resend-verification, favourites;
+- **pricing fixed** — it charged per *side*, making duplex dearer than simplex
+  while using half the paper. Now per sheet, with the odd page charged as a
+  single side. Colour is ₹10 a page either way; black and white is where the
+  duplex discount lives;
+- **a delete that destroyed the file and kept the row** — see the traps;
+- **receipts** (`app/modules/orders/invoice.py`, reportlab);
+- **the authz matrix is now exercised**, not merely declared — it found eight
+  drifts;
+- **subscription purchase**, which is what lets a SOLD/SAAS shop outlive its
+  trial;
+- **provisioning** — one call, both surfaces, `app/provisioning.py`;
+- **refunds over HTTP**.
 
 ---
 
 ## Traps that cost time in this session
 
-**`git checkout <file>` is not how you undo a mutation.** Reverting `app/main.py`
-after a mutation test also reverted the wiring that had been added to it minutes
-earlier, and the file it was meant to restore — `app/api/ratelimit.py` — was
-untracked, so the mutation stayed in place while the real work was thrown away.
-Copy the file aside, or edit it back.
+**`next build` while `next dev` is running breaks the dev server.** Shared
+`.next`; every route starts 500ing with `MODULE_NOT_FOUND`. It is written down
+in `printvendo-web/CLAUDE.md` and I did it twice anyway. Fix: stop dev,
+`rm -rf .next`, start dev again.
 
-**A command whose exit code you are reading may be failing for another reason.**
-`lint-imports > /dev/null` exits 1 on this machine whatever the contracts say:
-redirecting stdout puts `rich` into legacy-Windows rendering, which cannot
-encode its own banner in cp1252. Two "the contract caught it" results were that
-crash. `PYTHONIOENCODING=utf-8` fixes it, and `tests/test_architecture.py`
-already knew — it passes an encoding for exactly this reason.
+**Do not run two pytest sessions against the same Postgres.** A foreground run
+started while a background full run was going produced `DeadlockDetected` in a
+test that was fine.
 
-**import-linter: `|` means independent, `:` does not.** `app.jobs : app.api`
-looked like it declared two composition roots that may not import each other,
-and allowed a job to import the api layer. Only the mutation test found it.
+**`tests/test_migrations.py` leaves the schema wherever the migration under
+test left it** — empty, for the downgrade case — while the `schema` fixture is
+session-scoped and builds tables once. Adding a test file whose name sorts
+after `test_migrations` broke twelve unrelated tests with "relation users does
+not exist". Now fixed: the fixture rebuilds afterwards via
+`tests/conftest.rebuild_schema`, which imports every model first — a *partial*
+`Base.metadata` fails on a foreign key to a table nobody imported.
 
-**Two pytest sessions against one Postgres deadlock.** A foreground run started
-while a background full run was going produced `DeadlockDetected` in a test that
-was fine. Wait for the background one.
+**Autogenerated foreign keys are anonymous, and the downgrade cannot drop what
+it cannot name.** `alembic revision --autogenerate` emitted
+`op.drop_constraint(None, ...)`. Name the constraint in both directions.
 
-**A test can pass before the route exists — again.** Four of the CSV export
-tests passed against a 404, including "the student's email is not in the body".
-They assert the status code first now. This is the second session in a row this
-has happened; assume any new API test is vacuous until you have seen it fail.
+**`git checkout <file>` is not how you undo a mutation test.** It reverts your
+own uncommitted work in that file, and does nothing at all for an untracked
+one. Copy the file aside instead.
 
-**Adding a database read to `/health` broke a test that had nothing to do with
-health.** Several test modules build `Settings` with a `DATABASE_URL` pointing
-at a database that does not exist, which was harmless while `/health` only
-looked at the framework.
+**`lint-imports > /dev/null` exits 1 whatever the contracts say** — redirecting
+stdout puts `rich` into legacy-Windows rendering, which cannot encode its
+banner in cp1252. Use `PYTHONIOENCODING=utf-8`. Two "the contract caught it"
+results were that crash.
 
-**A paper counter that reads full is a sweep that reports nothing.** Paper is
-stored as sheets *used*, so a `KioskPaper` row with `used = 0` is a full tray.
-Test fixtures for the low-paper watcher have to set `used = capacity - wanted`.
+**import-linter: `|` means independent siblings, `:` does not.**
+`app.jobs : app.api` allowed a job to import the api layer. Only the mutation
+test found it.
+
+**A `\n` inside a bash heredoc that writes Python becomes a real newline.**
+Three times this session an f-string was written with a literal line break in
+it. Build such strings with `chr(10)`/`chr(92)`, or write separate `print()`
+calls.
+
+**A test can pass before the route exists — twice more this session.** Four
+CSV-export tests passed against a 404, including "the student's email is not in
+the body". Assert the status code first.
+
+**`b"text" in pdf` is false for a PDF that plainly says so** — reportlab
+compresses content streams. Read it back with pypdf.
 
 ---
 
-## The method, briefly
+## Known gaps that are not modules
 
-`CLAUDE.md` has this in full. The two parts most often skipped:
-
-1. **Mutation-test anything that matters.** After a security or money rule
-   lands, deliberately break it, confirm the *intended* test fails, restore.
-   Twelve mutations this session. Ten failed the intended test; one found a
-   missing test rather than a redundant guard, and one found a test of mine
-   that could not have failed.
-2. **Say what is not done.** Partial work is reported as partial.
-
-Two mechanisms fail the build if you add a route and do not think:
-
-- `tests/authz/matrix.py` — who may call it.
-- `tests/ops/audit_matrix.py` — whether it leaves an audit trail, `AUDITED` or
-  `EXEMPT` with a named reason.
-
-Both fired on every router added this session, and `tests/authz` had to be
-taught to see WebSocket routes before it could fire on the last one. Do not work
-around them.
+- **No `deploy/`** — no compose, proxy, TLS, backups. `docs_url=None` in prod
+  belongs here: `/docs`, `/redoc` and `/openapi.json` are currently public and
+  publish every admin route.
+- **`TRUST_PROXY_HEADERS` must be set at deploy**, or every request appears to
+  come from the proxy and the whole internet shares one rate-limit bucket.
+- **Rate limits are per address, not per account.** A campus shares one NAT, so
+  they stop a script rather than credential stuffing aimed at one person.
+- **No push notifications** — VAPID keys are read by nothing.
+- **No paper-shop catalogue** — `ItemKind.SHOP_ITEM` exists and nothing else
+  mentions it. The operator has decided the **admin** manages the catalogue.
+- **No owner-facing refund**, and no owner console: `printvendo-owner` is
+  unfinished and still on the legacy API. The admin console does not exist;
+  `/docs` plus the seeded admin is the admin surface today.
+- **Nothing sweeps for unsettled payments** — the third watcher the alerts
+  table was built for.
+- **The migration from `printit_legacy` is not started**, and the dump has not
+  arrived.
 
 ---
 
@@ -174,78 +176,46 @@ py -3.12 -m venv .venv               # NOT `python` — that is 3.13 here
 ```
 
 Postgres 18 on 5432, role `printvendo`, databases `printvendo` and
-`printvendo_test`. Tests need `printvendo_test` to exist and fail loudly rather
-than skip.
-
-Alembic reads `DATABASE_URL` from the **environment**, not from `.env`:
+`printvendo_test`. Alembic reads `DATABASE_URL` from the **environment**:
 
 ```bash
-export DATABASE_URL=$(grep -E "^DATABASE_URL=" .env | cut -d= -f2-)
+export DATABASE_URL=$(grep -E "^DATABASE_URL=" .env | cut -d= -f2- | tr -d '\r')
 ```
 
-Migrations are hand-written when autogenerate would be wrong. The most recent
-one (`9a1c4d77e2b1`, the change-request public id) adds a column nullable,
-backfills row by row — each id must be distinct, so one UPDATE with one
-generated value would violate the unique index it is about to get — and only
-then sets NOT NULL.
+### Running it, and clicking through it
+
+```bash
+.venv/Scripts/python -m uvicorn app.main:create_app --factory --port 8000
+cd ../printvendo-web && npm run dev          # port 3000, in .env already
+```
+
+`python -m app.cli seed` builds a whole world and prints the passwords.
+`python -m app.cli provision-kiosk --name "X" --type platform` stands up a real
+one and prints its enrolment code; `--type sold --owner-email …` invites an
+owner and says what it is waiting for.
+
+The dev database has seeded shops. **Only PLATFORM kiosks take wallet money** —
+that is deliberate and enforced in two places, so use one for testing without a
+card.
 
 ---
 
-## Known gaps that are not modules
+## The method, briefly
 
-Real, currently unowned, and none of them blocks the migration.
+`CLAUDE.md` has this in full. The two parts most often skipped:
 
-- **A subscription cannot be bought.** An admin can grant a trial and set terms,
-  and `quote_subscription` prices a renewal, but there is no purchase route —
-  `WebhookSettlement.settle_subscription` logs an error precisely because
-  nothing can reach it. Owners are currently on trials or nothing.
-- **Rate limits are per address, not per account.** Enough to stop a script,
-  not enough to stop credential stuffing aimed at one person, because a campus
-  shares one NAT and the tight limit that would work locks out a lecture hall.
-  Doing it properly needs the email out of the request body, which is a route's
-  business rather than the edge's.
-- **Nothing sweeps for unsettled payments.** Two of the three watchers the
-  alerts table was built for exist (offline kiosks, paper); money that was
-  taken and never settled is the third and has no detector.
-- **Redis is genuinely required in production**, not merely claimed by the
-  Dockerfile: `--workers 4` is correct for the wake because it goes through
-  pub/sub, and correct for the rate limiter because its counts do too. Without
-  Redis the socket degrades to polling and the limiter counts per process,
-  which enforces four times the configured number — silently. `ENV != dev`
-  chooses Redis, so there is no way to configure that mistake.
-- **`TRUST_PROXY_HEADERS` must be set at deploy.** Behind Caddy or nginx and
-  left false, every request arrives from the proxy and the whole internet
-  shares one rate-limit bucket. Set true with no proxy in front and anyone can
-  mint a fresh bucket per request.
-- **No `deploy/`** — no compose file, proxy config, backups or cron. Cron
-  matters less than it did: the sweeps run in the app.
+1. **Mutation-test anything that matters.** This session: the XFF hop, the CORS
+   ordering, the LIVE filter, the watcher standing down, the low-paper
+   threshold, the second-admin guard, the owner-router role guard, the two new
+   import contracts, and refund idempotency. Every one failed the intended test
+   and was restored.
+2. **Say what is not done.** Partial work is reported as partial.
 
----
+Three mechanisms fail the build if you add a route and do not think:
 
-## Frontends
+- `tests/authz/matrix.py` — who may call it;
+- `tests/authz/test_matrix_enforced.py` — and it is now *checked*, by firing
+  every audience the matrix does not name at every route;
+- `tests/ops/audit_matrix.py` — whether it leaves an audit trail.
 
-Not counted in the module list, and larger than the backend remainder in hours.
-
-Backend is `api.printvendo.com` — **deliberately on the apps' apex.** The
-refresh token is an httpOnly cookie with `SameSite=Lax`; a different
-registrable domain would make every app→API call cross-site, the cookie would
-be withheld on refresh, and every user would be signed out after 15 minutes.
-Do not move the API to a separate apex without changing the cookie strategy
-first.
-
-| App | Domain | State |
-|---|---|---|
-| student | `printvendo.com` | exists, targets the legacy API |
-| owner | `owner.printvendo.com` | unfinished, targets the legacy API |
-| admin | `admin.printvendo.com` | does not exist — now has 29 routes waiting |
-| refiller | `refiller.printvendo.com` | exists; 3 endpoints to rewire |
-
-**Pointing them at the new backend is a rewrite, not a config change.** Both
-Next.js apps call the legacy contract — `/wallet/hold`, `/wallet/hold/multi`,
-`/jobs/summary`, `/printers/`, `/payments/verify`. The two-call hold is exactly
-the hazard the `Order` aggregate was built to make unreachable, so those routes
-will never exist here. Each app's `lib/api.ts` gets rewritten.
-
-Refiller is the cheap one: `/refiller/printers`, `.../paper/reset`,
-`.../refill-logs` map almost one-to-one onto `/v1/refiller/kiosks/*`. Its real
-work is the new auth flow and opaque `ksk_` ids replacing numeric ones.
+All three fired this session. Do not work around them.

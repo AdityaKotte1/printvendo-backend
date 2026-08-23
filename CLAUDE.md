@@ -189,6 +189,49 @@ Copy `.env.example` to `.env` and fill it. The app refuses to boot with a
   a shop's takings on. A second grant extends the first rather than adding a
   row: two live trials would make "when does this stop being free" a question
   with two answers, and `active_subscription` takes the longest-running one.
+- **A page is one side of a sheet, and money is charged by the sheet.** A
+  `_single` price is a sheet printed on one side; a `_double` price is a sheet
+  printed on both. Two pages share a duplex sheet, and an odd page finishes on
+  a sheet printed on one side — charged as one, because its back is blank.
+  `quote_line` multiplied the double rate by the number of *sides*, which made
+  duplex dearer than simplex while using half the paper; three parts of the
+  system disagreed about the unit, including the module's own tests. The
+  property is now stated as one: **duplex never costs more than the same job
+  single-sided.** `lib/price.ts` mirrors `quote_line` exactly, verified across
+  96 combinations, because a pay screen whose number changes at checkout is
+  worse than no estimate.
+- **The authz matrix is exercised, not merely declared.**
+  `tests/authz/test_matrix_enforced.py` fires every audience the matrix does
+  *not* name at every route and requires a refusal — 401, 403 or 404. A **422
+  fails**, because it means the caller reached body validation and only the
+  shape of their request stopped them. It found eight routes guarded by scope
+  alone, where a signed-in student reached the handler and got an empty list:
+  nothing leaked, and the matrix's claim was false. Role guards live on the
+  *router*, so a route added tomorrow inherits one.
+- **A refused delete must not destroy the file first.**
+  `delete_document` removed the bytes and then let the database refuse the row,
+  answering 204 while deleting nothing — the student was told their file was
+  gone, the list still showed it, and it could no longer be printed. Every
+  reason to refuse is checked before anything is touched, and "is an order
+  counting on this?" arrives through a `DocumentUse` protocol wired at the
+  composition root, because printing may not import orders.
+- **A subscription is quoted once, frozen, and extends rather than overlaps.**
+  A plan's price may change while an owner is at the payment page. A renewal
+  starts when the current *entitlement* ends — the paid term or a trial running
+  past it — never at the end of the grace window, which is a buffer against a
+  late renewal and not time anybody bought. Nothing is in force until the money
+  arrives, and settling is idempotent because the webhook and the browser both
+  settle the same capture.
+- **A refund's idempotency key is required, never generated server-side.** A
+  request that times out is retried with the same key and gets back the refund
+  it already made. Inventing one per request was mutation-tested and fails the
+  retry test, which is exactly the defect it would be.
+- **Provisioning is a use case, not a shortcut.** `app/provisioning.py` climbs
+  the same onboarding ladder through the same services and stops where the
+  rules stop it; what it adds is *saying why*, in sentences. Its reasons are
+  staged — until somebody owns a shop there is nobody whose subscription or
+  keys could be missing. It sits below the composition roots so the admin route
+  and the command line run one implementation.
 - **Rate limits are a table, not a decorator.** `app/api/ratelimit.py` holds
   (method, path) → windows and an ASGI middleware applies them before routing,
   so a refused request costs no session and no query. A decorator per route is
@@ -262,7 +305,7 @@ documents describing the same thing is how they drift.
 
 ## State of play
 
-**1406 tests passing, 97 routes, 12 import contracts kept, ruff clean.** Verify with:
+**1544 tests passing, 105 routes, 12 import contracts kept, ruff clean.** Verify with:
 
 ```bash
 .venv/Scripts/python -m pytest -q && .venv/Scripts/lint-imports && .venv/Scripts/python -m ruff check .
@@ -275,14 +318,16 @@ documents describing the same thing is how they drift.
 | `app/core/` | config, db (+`EnumText`), ids, money, errors, crypto, security, notifier |
 | `identity/` | users, roles, sessions with rotation + reuse detection, password/Google/guest sign-in, email verification, password reset |
 | `kiosks/` | registry, types, onboarding + LIVE gate, pricing bands, paper (incl. consumption from device-reported sheets), assignments, consent-based staff invites, **the scope resolver** |
-| `payments/` | owner Razorpay keys encrypted at rest, set-once with approval, **the payment gate**, checkout + capture, in-house signature verification, one webhook per collecting account, **refunds** (gateway and balance, one path) |
-| `billing/` | plans, subscriptions, trials, per-owner discounts (D13), one quote function |
+| `payments/` | owner Razorpay keys encrypted at rest, set-once with approval, **the payment gate**, checkout + capture, in-house signature verification, one webhook per collecting account, **refunds** (gateway and balance, one path), now reachable over HTTP |
+| `billing/` | plans, subscriptions, trials, **purchase and renewal**, per-owner discounts (D13), one quote function |
 | `orders/` | **the aggregate** — payment and print tasks commit together, so "paid but never printed" is unreachable; quotes + gateway fee, wallet and gateway as two branches into one commit, expiry that releases reserved paper |
 | `wallet/` | ledger-as-record with the balance derived from it, double-spend refused by a conditional UPDATE rather than a read-check-write, `UNIQUE (wallet_id, reference)` for replayed webhooks |
 | `printing/` | print options + the one workload calculation, Document and PrintTask models, **atomic claim with `FOR UPDATE SKIP LOCKED`** and lease recovery, storage (opaque keys), PDF pipeline (Ghostscript under `-dSAFER`), task progress + paper from device-reported sheets, photo→A4 layout, retention |
 | `ops/` | audit trail (one rule, matrix-enforced) and deduplicating admin alerts that stand down when the condition clears |
 | `api/` | `deps`, `student/*`, `owner/*` (incl. the orders CSV), `refiller/kiosks`, `device/*` (incl. **the WebSocket**), **`admin/*`**, **rate limits** — 97 routes, all in `tests/authz/matrix.py` |
 | `jobs/` | the scheduler and four sweeps: order expiry, file retention, the offline-kiosk watcher, the paper watcher |
+| `cli/` | `bootstrap-admin`, `seed`, `provision-kiosk` — the first way in, and a world to click through |
+| `provisioning` | one use case, two roots: stand a kiosk up and say what is still missing |
 
 ### Not built yet, in dependency order
 
@@ -290,9 +335,9 @@ documents describing the same thing is how they drift.
 2. **cutover** — agent rewrite (it must learn the socket), staging, freeze
    window
 
-Not modules, but real and still unowned: there is no `deploy/`, no
-subscription can be bought, and per-account rate limits (as opposed to
-per-address ones) do not exist. See `HANDOFF.md`.
+Not modules, but real and still unowned: there is no `deploy/`, no push
+notifications, no paper-shop catalogue, no owner console, and per-account rate
+limits (as opposed to per-address ones) do not exist. See `HANDOFF.md`.
 
 ### Blocked on the operator
 
