@@ -159,9 +159,21 @@ def _report_kiosk(result, settings) -> None:
 
     print()
     print(f"enrolment code (spend within 12h): {result.enrolment_code}")
-    print("  on the machine itself:")
-    print(f"  POST {settings.PUBLIC_BASE_URL}/v1/device/register")
-    print(f'       {{"enrolment_code": "{result.enrolment_code}"}}')
+    # The two commands somebody actually runs, rather than the request they
+    # make: whoever is standing at the shop has the installer, not curl.
+    print()
+    print("  on the machine itself, from the printvendo-agent folder:")
+    print(
+        f"    sudo bash install-pi.sh --code {result.enrolment_code} "
+        f"--api {settings.PUBLIC_BASE_URL}"
+    )
+    print(
+        f"    powershell -ExecutionPolicy Bypass -File install-windows.ps1 "
+        f"-Code {result.enrolment_code} -Api {settings.PUBLIC_BASE_URL}"
+    )
+    print()
+    print("  add --printer NAME (-Printer 'NAME') if the machine has more than one.")
+    print("  SETUP.md in that folder is the full procedure.")
     print()
 
 def _report(world, settings) -> None:

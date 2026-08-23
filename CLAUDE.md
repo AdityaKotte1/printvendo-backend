@@ -305,7 +305,7 @@ documents describing the same thing is how they drift.
 
 ## State of play
 
-**1544 tests passing, 105 routes, 12 import contracts kept, ruff clean.** Verify with:
+**1552 tests passing, 105 routes, 12 import contracts kept, ruff clean.** Verify with:
 
 ```bash
 .venv/Scripts/python -m pytest -q && .venv/Scripts/lint-imports && .venv/Scripts/python -m ruff check .
@@ -331,13 +331,20 @@ documents describing the same thing is how they drift.
 
 ### Not built yet, in dependency order
 
-1. **migration** from `printit_legacy` (restored locally from a prod dump)
-2. **cutover** — agent rewrite (it must learn the socket), staging, freeze
-   window
+1. **deploy** — there is no `deploy/`, and `docs_url=None` in production belongs
+   with it
+2. **migration** from `printit_legacy` (a dump taken during a maintenance
+   window; the local restore is gone)
+3. **cutover** — staging, freeze window
 
-Not modules, but real and still unowned: there is no `deploy/`, no push
-notifications, no paper-shop catalogue, no owner console, and per-account rate
-limits (as opposed to per-address ones) do not exist. See `HANDOFF.md`.
+The device agent is **built**: `../printvendo-agent`, one agent for both a
+Raspberry Pi and a Windows PC, on `/v1/device/*`. It replaces `pi-agent/` and
+`windows-agent (1)/`, which stay in the repo until cutover and must not be
+edited. It polls rather than holding the wake socket, which works and is slower.
+
+Not modules, but real and still unowned: push notifications, the paper-shop
+catalogue, the owner console, and per-account rate limits (as opposed to
+per-address ones). See `HANDOFF.md`.
 
 ### Blocked on the operator
 
