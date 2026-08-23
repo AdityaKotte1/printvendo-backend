@@ -373,3 +373,80 @@ def test_the_type_change_records_what_it_moved_between(
 
     assert entry.before["kiosk_type"] == KioskType.PLATFORM.value
     assert entry.after["kiosk_type"] == KioskType.SOLD.value
+
+
+# ── standing a shop up in one request ───────────────────────────────────────
+
+
+def test_provisioning_a_platform_kiosk_leaves_it_selling(client, admin_auth):
+    response = client.post(
+        "/v1/admin/kiosks/provision",
+        headers=admin_auth,
+        json={
+            "name": "One Call Shop",
+            "kiosk_type": "platform",
+            "price_bw_single": "2.00",
+            "price_bw_double": "3.00",
+            "price_color_single": "10.00",
+            "price_color_double": "20.00",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["selling"] is True
+    assert body["blocked_by"] == []
+    assert body["kiosk"]["onboarding_stage"] == "live"
+    assert body["enrolment_code"].startswith("dve_")
+
+
+def test_provisioning_a_sold_kiosk_says_what_is_missing(client, admin_auth):
+    """It cannot go live -- nobody can collect at it yet -- and the response
+    says so in a sentence rather than leaving an operator to infer it."""
+    response = client.post(
+        "/v1/admin/kiosks/provision",
+        headers=admin_auth,
+        json={"name": "Somebody Elses Shop", "kiosk_type": "sold"},
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["selling"] is False
+    assert body["blocked_by"]
+    assert body["kiosk"]["onboarding_stage"] != "live"
+
+
+def test_provisioning_invites_the_owner_by_email(client, admin_auth):
+    """Invited, not attached: somebody must consent to owning a shop."""
+
+    class Recording(NullNotifier):
+        sent: list[tuple[str, str]] = []
+
+        def send_staff_invite(self, *, email, token, kiosk_name):
+            Recording.sent.append((email, kiosk_name))
+
+    Recording.sent = []
+    client.app.dependency_overrides[get_notifier] = lambda: Recording()
+
+    client.post(
+        "/v1/admin/kiosks/provision",
+        headers=admin_auth,
+        json={
+            "name": "Invited Shop",
+            "kiosk_type": "sold",
+            "owner_email": "shopkeeper@example.com",
+        },
+    )
+
+    assert Recording.sent, "the invitation was never sent"
+    assert Recording.sent[0] == ("shopkeeper@example.com", "Invited Shop")
+
+
+def test_provisioning_is_admin_only(client, owner_auth):
+    response = client.post(
+        "/v1/admin/kiosks/provision",
+        headers=owner_auth,
+        json={"name": "Not Yours", "kiosk_type": "platform"},
+    )
+
+    assert response.status_code == 403

@@ -66,6 +66,24 @@ def anyone_holds(db: Session, role: Role) -> bool:
     return db.execute(stmt).first() is not None
 
 
+def first_with_role(db: Session, role: Role) -> User | None:
+    """The longest-standing account holding this role.
+
+    Used where an action needs an actor but there is no session to take one
+    from -- setting a shop up from the command line, which still has to be
+    recorded against somebody. Oldest first, so it is stable: the answer does
+    not change as accounts come and go.
+    """
+    stmt = (
+        select(User)
+        .join(UserRole, UserRole.user_id == User.id)
+        .where(UserRole.role == role, User.is_active.is_(True))
+        .order_by(User.id)
+        .limit(1)
+    )
+    return db.execute(stmt).scalars().first()
+
+
 def grant_role(db: Session, user_id: int, role: Role) -> None:
     """Give a user a role. Granting one they already hold is a no-op."""
     if role in roles_of(db, user_id):

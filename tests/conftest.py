@@ -91,6 +91,35 @@ def _who_holds_the_lock(engine) -> str:
     )
 
 
+def load_every_model() -> None:
+    """Import every module's models, so `Base.metadata` is complete.
+
+    Relying on a test module's own import works only until collection order
+    changes, and then fails as "relation does not exist" a long way from the
+    cause. Worse, a *partial* metadata fails on a foreign key to a table that
+    was simply never imported. This list grows with each new module, exactly
+    like migrations/env.py.
+
+    Shared, because tests/test_migrations.py rebuilds the schema too and a
+    second copy of this list is a second copy to forget to update.
+    """
+    import app.modules.billing.models  # noqa: F401
+    import app.modules.identity.models  # noqa: F401
+    import app.modules.kiosks.models  # noqa: F401
+    import app.modules.ops.models  # noqa: F401
+    import app.modules.orders.models  # noqa: F401
+    import app.modules.payments.models  # noqa: F401
+    import app.modules.printing.models  # noqa: F401
+    import app.modules.wallet.models  # noqa: F401
+
+
+def rebuild_schema(url: str) -> None:
+    """Drop everything and build the tables from the ORM, as tests expect them."""
+    load_every_model()
+    reset_public_schema(url)
+    Base.metadata.create_all(get_engine(url))
+
+
 @pytest.fixture(scope="session")
 def schema(postgres_url: str) -> str:
     """Build the whole schema from ORM metadata once per test session.

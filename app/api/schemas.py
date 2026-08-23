@@ -13,7 +13,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 
 class PaperResponse(BaseModel):
@@ -562,6 +562,46 @@ class CreateKioskRequest(BaseModel):
     latitude: float | None = None
     longitude: float | None = None
     paper_capacity: int | None = None
+
+
+class ProvisionKioskRequest(BaseModel):
+    """Everything needed to stand a shop up, in one request."""
+
+    name: str
+    kiosk_type: str = "platform"
+    # Per sheet: `_single` is a sheet printed on one side, `_double` a sheet
+    # printed on both. Omitted prices fall back to the platform defaults.
+    price_bw_single: Decimal | None = None
+    price_bw_double: Decimal | None = None
+    price_color_single: Decimal | None = None
+    price_color_double: Decimal | None = None
+
+    location_description: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    paper_capacity: int | None = None
+    sheets_in_tray: int | None = None
+
+    # Invited, never attached: somebody must consent to owning a shop. Required
+    # in practice for a SOLD or SAAS kiosk, which cannot sell without an owner.
+    owner_email: EmailStr | None = None
+
+
+class ProvisionedKioskResponse(BaseModel):
+    """The shop, and what somebody still has to do.
+
+    `blocked_by` is empty when it is selling. Sentences rather than codes,
+    because the only thing that reads them is a person deciding who to chase --
+    an operator seeing `configured` cannot tell whether they are waiting on an
+    owner, a subscription, or a set of Razorpay keys.
+    """
+
+    kiosk: AdminKioskResponse
+    selling: bool
+    blocked_by: list[str]
+    # Spend within twelve hours, on the machine itself. Shown once.
+    enrolment_code: str
+    enrolment_expires_at: datetime
 
 
 class StageChangeRequest(BaseModel):

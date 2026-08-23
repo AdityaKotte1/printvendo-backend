@@ -1,27 +1,39 @@
 import os
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, text
 
-from tests.conftest import reset_public_schema
+from tests.conftest import rebuild_schema, reset_public_schema
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture
-def empty_database(postgres_url: str) -> str:
+def empty_database(postgres_url: str) -> Iterator[str]:
     """A schema with nothing in it, for migrations to build from scratch.
 
     The db_session fixture builds tables with Base.metadata.create_all, and
     tests/modules runs before this file. Without the reset, `alembic upgrade
     head` meets tables that already exist and fails on the first create_table --
     a failure about test ordering, not about the migration.
+
+    **And it is put back afterwards.** These tests leave the schema in whatever
+    state they were testing -- `test_downgrade_to_base_removes_everything`
+    leaves it empty by design -- while the `schema` fixture that every other
+    test relies on is session-scoped and builds the tables exactly once. So
+    anything running after this file found no `users` table and failed for a
+    reason that had nothing to do with it. Adding a test file whose name sorts
+    after `test_migrations` was enough to trip it.
     """
     reset_public_schema(postgres_url)
-    return postgres_url
+    try:
+        yield postgres_url
+    finally:
+        rebuild_schema(postgres_url)
 
 
 def _alembic(args: list[str], url: str) -> subprocess.CompletedProcess:

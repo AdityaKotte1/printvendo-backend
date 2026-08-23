@@ -20,6 +20,7 @@ surface uses for refillers, answering identically whether or not the address has
 an account -- an admin console is not a directory lookup.
 """
 
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, status
@@ -28,6 +29,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import (
     CurrentUser,
     KioskScope,
+    get_band_source,
     get_billing_check,
     get_db,
     get_notifier,
@@ -39,6 +41,8 @@ from app.api.schemas import (
     InviteOwnerRequest,
     KioskTypeChangeRequest,
     PaperResponse,
+    ProvisionedKioskResponse,
+    ProvisionKioskRequest,
     StageChangeRequest,
 )
 from app.core.errors import BadRequest
@@ -46,7 +50,9 @@ from app.core.notifier import Notifier
 from app.modules.identity import User
 from app.modules.identity.roles import Role
 from app.modules.kiosks import (
+    ENROLMENT_LIFETIME,
     AssignmentRole,
+    BandSource,
     BillingCheck,
     Kiosk,
     KioskType,
@@ -60,6 +66,7 @@ from app.modules.kiosks import (
 )
 from app.modules.kiosks import repository as kiosk_repo
 from app.modules.ops import audit
+from app.provisioning import provision_kiosk, readiness
 
 router = APIRouter(prefix="/v1/admin/kiosks", tags=["admin"])
 
@@ -123,6 +130,88 @@ def register_kiosk(
         after={"name": kiosk.name, "kiosk_type": KioskType(kiosk.kiosk_type).value},
     )
     return _as_response(db, kiosk)
+
+
+@router.post(
+    "/provision",
+    response_model=ProvisionedKioskResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def provision(
+    body: ProvisionKioskRequest,
+    admin: CurrentAdmin,
+    db: Annotated[Session, Depends(get_db)],
+    bands: Annotated[BandSource, Depends(get_band_source)],
+    billing: Annotated[BillingCheck, Depends(get_billing_check)],
+    notifier: Annotated[Notifier, Depends(get_notifier)],
+) -> ProvisionedKioskResponse:
+    """Stand a shop up in one request, as far as its type allows.
+
+    Not a shortcut around the onboarding ladder -- the same services, climbed a
+    rung at a time, so CONFIGURED still cannot be skipped and a SOLD kiosk whose
+    owner cannot collect still cannot reach LIVE. What it adds is that the
+    caller is *told* what is outstanding, in sentences, instead of inferring it
+    from a stage name.
+    """
+    prices = {
+        field: value
+        for field, value in (
+            ("bw_single", body.price_bw_single),
+            ("bw_double", body.price_bw_double),
+            ("color_single", body.price_color_single),
+            ("color_double", body.price_color_double),
+        )
+        if value is not None
+    }
+
+    result = provision_kiosk(
+        db,
+        name=body.name,
+        kiosk_type=_kiosk_type(body.kiosk_type),
+        prices=prices,
+        actor_user_id=admin.id,
+        location_description=body.location_description,
+        latitude=body.latitude,
+        longitude=body.longitude,
+        paper_capacity=body.paper_capacity,
+        sheets_in_tray=body.sheets_in_tray,
+        owner_email=body.owner_email,
+        bands=bands,
+        billing=billing,
+    )
+
+    if result.owner_invite_token is not None:
+        # Provisioning does not send mail, for the same reason identity does
+        # not: it would make every test that sets up a shop depend on a
+        # provider. The composition root has a notifier and does it here.
+        notifier.send_staff_invite(
+            email=body.owner_email,
+            token=result.owner_invite_token,
+            kiosk_name=result.kiosk.name,
+        )
+
+    audit.record(
+        db,
+        action="kiosk.provisioned",
+        entity_type="kiosk",
+        entity_id=result.kiosk.public_id,
+        actor_user_id=admin.id,
+        after={
+            "name": result.kiosk.name,
+            "kiosk_type": KioskType(result.kiosk.kiosk_type).value,
+            "stage": OnboardingStage(result.kiosk.onboarding_stage).value,
+            "blocked_by": result.blocked_by,
+        },
+    )
+
+    selling, _ = readiness(db, result.kiosk)
+    return ProvisionedKioskResponse(
+        kiosk=_as_response(db, result.kiosk),
+        selling=selling,
+        blocked_by=result.blocked_by,
+        enrolment_code=result.enrolment_code,
+        enrolment_expires_at=datetime.now(UTC) + ENROLMENT_LIFETIME,
+    )
 
 
 @router.get("/{kiosk_id}", response_model=AdminKioskResponse)

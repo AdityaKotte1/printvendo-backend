@@ -177,6 +177,10 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     # has only LIVE and MAINTENANCE -- wider scope, not a bypass: the same
     # `move_to` refuses the same transitions for both.
     ("POST", "/v1/admin/kiosks"): {ADMIN},
+    # The same ladder in one request. Admin only, like every other kiosk
+    # creation: it decides which shop a machine belongs to and whose account
+    # collects at it.
+    ("POST", "/v1/admin/kiosks/provision"): {ADMIN},
     ("GET", "/v1/admin/kiosks/{kiosk_id}"): {ADMIN},
     ("POST", "/v1/admin/kiosks/{kiosk_id}/stage"): {ADMIN},
     ("PUT", "/v1/admin/kiosks/{kiosk_id}/type"): {ADMIN},

@@ -153,6 +153,7 @@ type = forbidden
 source_modules =
     app.jobs
     app.cli
+    app.provisioning
 forbidden_modules =
     app.modules.identity.models
     app.modules.kiosks.models
@@ -164,7 +165,7 @@ forbidden_modules =
 allow_indirect_imports = True
 
 [importlinter:contract:layers]
-name = jobs, api and the command line sit above modules sit above core
+name = the roots sit above use cases sit above modules sit above core
 type = layers
 # `app.jobs | app.api` is one layer holding two *independent* siblings -- the
 # pipe is what makes them independent; a colon would let them import each other
@@ -173,5 +174,6 @@ type = layers
 # same service the job calls.
 layers =
     app.jobs | app.api | app.cli
+    app.provisioning
     app.modules
     app.core
