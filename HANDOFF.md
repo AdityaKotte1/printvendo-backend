@@ -342,7 +342,19 @@ cases.
   Razorpay transaction behind it.
 - **₹1 of owner-route refunds** on Agent Test Shop from the previous section.
 
-## Two bugs found by using it, and fixed
+## Three bugs found and fixed
+
+**A jam at an owner-closed shop made us claim the closure.** `report_stuck`
+wrote `device.stuck_since` before it looked at the stage, so a jam at a kiosk an
+owner had already put into MAINTENANCE recorded *us* as the reason. The next
+recovery read that field, saw it set, and moved the shop back to LIVE -- handing
+it to students with the printer in pieces on the counter. Exactly the failure
+the field was added to prevent. The stage check now comes first and returns
+without recording; the release in `report_recovered` stays ungated on purpose,
+and the docstring says why. Found by the automated security review of the
+commit, not by a test -- the existing test covered recovery on an owner-closed
+shop but never reported a jam *while* it was closed, which is the whole
+sequence.
 
 **A failed subscription payment locked the owner out for ever.**
 `PENDING_PAYMENT` was only ever set -- `activate_subscription` cleared it on
