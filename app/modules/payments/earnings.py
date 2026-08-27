@@ -19,7 +19,7 @@ endpoint did precisely that.
 """
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import func, select
@@ -34,6 +34,14 @@ from app.modules.payments.models import (
 )
 
 ZERO = Decimal("0.00")
+
+# A day is where the shop is. Every timestamp here is stored in UTC, and a sale
+# at half past eight in the evening UTC happened at two the following morning in
+# Karnataka -- so bucketing in UTC files a late sale under the day before, and a
+# shopkeeper reconciling yesterday finds a figure that matches nothing they saw.
+# This product is sold in India and prices in rupees; one zone, named once, is
+# the whole of the localisation it needs.
+REPORTING_TIMEZONE = "Asia/Kolkata"
 
 
 @dataclass(frozen=True)
@@ -150,6 +158,76 @@ def earnings_by_kiosk(
     # missing key reads as "no data" and gets rendered as a blank; zero is the
     # true and more useful answer.
     return {kiosk_id: found.get(kiosk_id, Earnings.of(ZERO, ZERO, 0)) for kiosk_id in kiosk_ids}
+
+
+@dataclass(frozen=True)
+class DayEarnings:
+    """One day of the same four numbers."""
+
+    day: date
+    earnings: Earnings
+
+
+def earnings_by_day(
+    db: Session,
+    kiosk_ids: list[int],
+    *,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> list[DayEarnings]:
+    """The window total, split by day, in one query.
+
+    Two properties carry this, and both are the reason it is here rather than in
+    a browser:
+
+    **The days add up to the window.** Same predicate, same columns, same
+    `refunded_inr` read off the payment -- so a refund is filed against the day
+    the money arrived, exactly as `earnings_for_kiosks` counts it. A chart whose
+    bars do not sum to the figure printed above them is worse than no chart.
+
+    **A quiet day is a zero, not a gap.** The series runs unbroken from the
+    first day with takings to the last, because a missing day renders as a bar
+    next to the wrong neighbour. It is not padded out to the ends of the
+    window: an owner asking for this year in March does not want nine months of
+    empty bars, and the two dates they did ask about are already on the page.
+    """
+    if not kiosk_ids:
+        return []
+
+    day = func.date(func.timezone(REPORTING_TIMEZONE, Payment.captured_at)).label("day")
+
+    stmt = _settled(
+        select(
+            day,
+            func.coalesce(func.sum(Payment.amount_inr), 0),
+            func.coalesce(func.sum(Payment.refunded_inr), 0),
+            func.count(Payment.id),
+        ).where(
+            Payment.kiosk_id.in_(kiosk_ids),
+            Payment.kind == PaymentKind.PRINT_ORDER,
+        )
+    ).group_by(day)
+
+    if since is not None:
+        stmt = stmt.where(Payment.captured_at >= since)
+    if until is not None:
+        stmt = stmt.where(Payment.captured_at < until)
+
+    found = {
+        row_day: Earnings.of(gross, refunded, count)
+        for row_day, gross, refunded, count in db.execute(stmt).all()
+    }
+    if not found:
+        return []
+
+    cursor, last = min(found), max(found)
+    series: list[DayEarnings] = []
+    while cursor <= last:
+        series.append(
+            DayEarnings(day=cursor, earnings=found.get(cursor, Earnings.of(ZERO, ZERO, 0)))
+        )
+        cursor += timedelta(days=1)
+    return series
 
 
 @dataclass(frozen=True)

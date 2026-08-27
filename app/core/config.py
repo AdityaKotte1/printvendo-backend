@@ -90,6 +90,19 @@ class Settings(BaseSettings):
     MAIL_FROM_EMAIL: str = "hello@printvendo.com"
     MAIL_FROM_NAME: str = "Printvendo"
 
+    # Whose name is at the top of an owner's subscription invoice, and the
+    # address under it. Config rather than a constant because it is a legal
+    # detail that changes without the software changing -- a registered office
+    # moves, a trading name is added -- and because an invoice is the one thing
+    # here a third party may hold us to.
+    #
+    # `INVOICE_ISSUER_LINES` is a pipe-separated list, printed one line each.
+    # Empty is legitimate: an invoice with a name and no address is thinner than
+    # one with both, and inventing an address would be worse than either.
+    INVOICE_ISSUER_NAME: str = "Printvendo"
+    INVOICE_ISSUER_LINES: str = ""
+    INVOICE_ISSUER_EMAIL: str = "billing@printvendo.com"
+
     # Whether this process runs the scheduled sweeps. On by default and safe to
     # leave on everywhere: every worker asks Postgres for the same advisory lock
     # and only one of them gets it. Off is for a one-off process -- a shell, a

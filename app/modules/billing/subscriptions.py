@@ -96,6 +96,19 @@ def is_on_trial(subscription: Subscription, *, now: datetime | None = None) -> b
     return subscription.free_until is not None and now < subscription.free_until
 
 
+def subscription_by_public_id(db: Session, public_id: str) -> Subscription | None:
+    """The subscription with this id, or nothing.
+
+    `None` rather than a raise, so the caller decides what a miss means. It is a
+    404 with the same sentence as somebody else's, because telling one owner
+    that another owner's subscription exists is telling them something true
+    about a competitor.
+    """
+    return db.execute(
+        select(Subscription).where(Subscription.public_id == public_id)
+    ).scalar_one_or_none()
+
+
 def subscriptions_of(db: Session, user_id: int) -> list[Subscription]:
     """Everything this owner has ever been on, newest first."""
     return list(

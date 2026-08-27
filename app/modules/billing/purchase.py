@@ -37,9 +37,16 @@ DAYS_PER_MONTH = 30
 # take a shop offline over a weekend.
 GRACE_DAYS = 5
 
+# How long an unpaid purchase holds the slot, mirroring `ORDER_LIFETIME` and
+# for the same reason: it is somebody standing at a payment page, not a
+# commitment. Long enough for a slow card and a re-entered OTP; short enough
+# that a shop that gave up is not locked out of the thing that keeps it selling.
+PURCHASE_LIFETIME = timedelta(minutes=20)
+
 ALREADY_BUYING = (
     "There is already a payment open for this subscription. Finish it, or wait "
-    "for it to lapse, before starting another."
+    f"{int(PURCHASE_LIFETIME.total_seconds() // 60)} minutes for it to lapse, "
+    "before starting another."
 )
 NOT_PURCHASABLE = "That subscription is not waiting to be paid for."
 
@@ -59,14 +66,36 @@ def start_purchase(
     """
     now = now or datetime.now(UTC)
 
-    open_already = db.execute(
-        select(Subscription).where(
-            Subscription.user_id == user_id,
-            Subscription.status == SubscriptionStatus.PENDING_PAYMENT,
+    # An unpaid purchase blocks the next one, but only while it is still live.
+    #
+    # It used to block for ever: `PENDING_PAYMENT` was set here and cleared only
+    # by `activate_subscription`, so a checkout that failed -- or that somebody
+    # simply closed -- left a row nothing would ever remove, and no sweep looked
+    # at it. One failed card payment locked that owner out of buying a
+    # subscription at all, which is the thing that keeps their shops selling.
+    # The sentence even told them to wait for it to lapse, and nothing made it.
+    open_already = (
+        db.execute(
+            select(Subscription).where(
+                Subscription.user_id == user_id,
+                Subscription.status == SubscriptionStatus.PENDING_PAYMENT,
+            )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if open_already is not None:
-        raise Conflict(ALREADY_BUYING)
+        if open_already.created_at is not None and (
+            now - open_already.created_at
+        ) <= PURCHASE_LIFETIME:
+            raise Conflict(ALREADY_BUYING)
+
+        # Cancelled rather than deleted: "they tried and did not finish" is a
+        # different fact from "they never tried", and support needs both --
+        # the same reason a failed payment is recorded instead of removed.
+        open_already.status = SubscriptionStatus.CANCELLED
+        db.add(open_already)
+        db.flush()
 
     existing = active_subscription(db, user_id)
     quote = quote_subscription(

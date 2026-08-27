@@ -20,6 +20,7 @@ import pytest
 from app.core.errors import BadRequest, Conflict
 from app.modules.billing import (
     GRACE_DAYS,
+    PURCHASE_LIFETIME,
     activate_subscription,
     active_subscription,
     grant_trial,
@@ -223,3 +224,87 @@ def test_the_gate_opens_for_a_paid_owner(db_session, owner, plan):
     assert (
         db_session.query(Subscription).filter_by(user_id=owner.id).count() == 1
     ), "a purchase is one row from checkout to expiry"
+
+
+# ── a purchase nobody finished must not be a life sentence ──────────────────
+#
+# `PENDING_PAYMENT` was only ever set and never cleared: `activate_subscription`
+# left it on success and nothing at all left it on failure. No sweep touched it,
+# so one abandoned or failed checkout blocked that owner from ever buying a
+# subscription again -- and `ALREADY_BUYING` told them to "wait for it to
+# lapse", which nothing made happen. Found by a test payment being simulated as
+# a failure and the retry being refused for ever.
+#
+# The age is read off `created_at`, which the database sets, so these backdate
+# the row rather than winding the clock back on the caller -- passing a `now`
+# from before the row was written would be testing a situation that cannot
+# occur.
+
+
+def _opened_at(db_session, subscription, when):
+    subscription.created_at = when
+    db_session.add(subscription)
+    db_session.flush()
+    return subscription
+
+
+def test_a_purchase_nobody_finished_stops_blocking_the_next_one(db_session, plan, owner):
+    """The reported bug. A checkout that failed, or that somebody simply closed,
+    leaves a pending row; once it is older than the window it must not still be
+    in the way."""
+    stale = _opened_at(
+        db_session,
+        start_purchase(db_session, user_id=owner.id, plan=plan, duration_months=6),
+        datetime.now(UTC) - PURCHASE_LIFETIME - timedelta(minutes=1),
+    )
+
+    fresh = start_purchase(
+        db_session, user_id=owner.id, plan=plan, duration_months=6
+    )
+
+    assert fresh.id != stale.id
+    assert stale.status is SubscriptionStatus.CANCELLED
+    assert fresh.status is SubscriptionStatus.PENDING_PAYMENT
+
+
+def test_a_purchase_opened_a_moment_ago_still_blocks(db_session, plan, owner):
+    """Two live checkouts for one owner would make "what am I paying" a
+    question with two answers, and a double-click is not a second purchase."""
+    start_purchase(db_session, user_id=owner.id, plan=plan, duration_months=6)
+
+    with pytest.raises(Conflict) as raised:
+        start_purchase(db_session, user_id=owner.id, plan=plan, duration_months=6)
+
+    # The sentence has to be true: it tells the owner to wait, so it says how
+    # long -- and something now actually makes the waiting end.
+    assert "20 minutes" in str(raised.value.detail)
+
+
+def test_the_lapsed_purchase_is_cancelled_rather_than_removed(db_session, plan, owner):
+    """"They tried and did not finish" is a different fact from "they never
+    tried", and support needs both -- the same reason a failed payment is
+    recorded rather than deleted."""
+    stale = _opened_at(
+        db_session,
+        start_purchase(db_session, user_id=owner.id, plan=plan, duration_months=6),
+        datetime.now(UTC) - PURCHASE_LIFETIME - timedelta(minutes=1),
+    )
+    stale_id = stale.id
+
+    start_purchase(db_session, user_id=owner.id, plan=plan, duration_months=6)
+
+    assert db_session.get(Subscription, stale_id) is not None
+
+
+def test_a_lapsed_purchase_is_not_in_force(db_session, plan, owner):
+    """Cancelling it must not be mistaken for activating it. Nothing was paid,
+    so nothing may collect."""
+    _opened_at(
+        db_session,
+        start_purchase(db_session, user_id=owner.id, plan=plan, duration_months=6),
+        datetime.now(UTC) - PURCHASE_LIFETIME - timedelta(minutes=1),
+    )
+
+    start_purchase(db_session, user_id=owner.id, plan=plan, duration_months=6)
+
+    assert has_active_subscription(db_session, owner.id) is False

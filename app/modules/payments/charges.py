@@ -36,6 +36,7 @@ from app.modules.payments.configs import (
 )
 from app.modules.payments.gate import Gateway, kiosk_payment_gate
 from app.modules.payments.models import (
+    SETTLED_PAYMENT_STATES,
     Payment,
     PaymentKind,
     PaymentSource,
@@ -289,6 +290,27 @@ def credentials_for_payment(
         raise Conflict(NO_KEYS_TO_REFUND_WITH)
 
     return Credentials(config.razorpay_key_id, decrypt_secret(config, box))
+
+
+def payment_for_subscription(db: Session, subscription_id: int) -> Payment | None:
+    """The captured payment that bought this subscription, if one has.
+
+    Captured only, and that is the point: an invoice is a document about money
+    that arrived, so a checkout somebody opened and abandoned must not be able
+    to date one. A renewal writes a second payment against the same
+    subscription -- the most recent capture is the one that bought the term
+    currently in force.
+    """
+    stmt = (
+        select(Payment)
+        .where(
+            Payment.subscription_id == subscription_id,
+            Payment.kind == PaymentKind.SUBSCRIPTION,
+            Payment.status.in_(SETTLED_PAYMENT_STATES),
+        )
+        .order_by(Payment.id.desc())
+    )
+    return db.execute(stmt).scalars().first()
 
 
 def payment_for_order(db: Session, order_id: int) -> Payment | None:

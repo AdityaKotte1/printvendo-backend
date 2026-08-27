@@ -7,7 +7,7 @@ page and their kiosk page therefore reported different revenue for the same day,
 and by its own definition neither was wrong.
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -18,6 +18,7 @@ from app.modules.kiosks.models import Kiosk
 from app.modules.payments import PaymentKind, record_wallet_payment
 from app.modules.payments.charges import Credentials, open_checkout, record_capture
 from app.modules.payments.earnings import (
+    earnings_by_day,
     earnings_by_kiosk,
     earnings_for_kiosks,
     platform_revenue,
@@ -376,3 +377,161 @@ def test_nothing_at_all_reads_as_zero_rather_than_missing(db_session):
 
     assert revenue.print_platform.gross_inr == Decimal("0.00")
     assert revenue.subscriptions.order_count == 0
+
+
+# ── the same money, day by day ──────────────────────────────────────────────
+#
+# The admin console built this client-side out of the order CSV, and the owner
+# app was about to build a second one. A chart is a number somebody reads off a
+# page, so it belongs to the same arithmetic as the total beside it.
+
+
+def test_takings_are_bucketed_by_the_day_they_arrived(
+    db_session, gateway, student, kiosk
+):
+    a_capture(
+        db_session,
+        gateway,
+        student,
+        kiosk,
+        "40.00",
+        at=datetime(2026, 8, 18, 9, 0, tzinfo=UTC),
+    )
+    a_capture(
+        db_session,
+        gateway,
+        student,
+        kiosk,
+        "60.00",
+        at=datetime(2026, 8, 18, 17, 0, tzinfo=UTC),
+    )
+    a_capture(
+        db_session,
+        gateway,
+        student,
+        kiosk,
+        "25.00",
+        at=datetime(2026, 8, 19, 9, 0, tzinfo=UTC),
+    )
+
+    series = earnings_by_day(db_session, [kiosk.id])
+
+    assert [(row.day, row.earnings.gross_inr) for row in series] == [
+        (date(2026, 8, 18), Decimal("100.00")),
+        (date(2026, 8, 19), Decimal("25.00")),
+    ]
+
+
+def test_the_days_add_up_to_the_window_total(db_session, gateway, student, kiosk):
+    """The property the whole endpoint exists for. A chart whose bars do not sum
+    to the figure printed above them is worse than no chart -- and that is
+    exactly what a second, client-side implementation drifts into."""
+    for offset, amount in ((0, "10.00"), (1, "20.00"), (3, "30.50")):
+        a_capture(
+            db_session, gateway, student, kiosk, amount, at=NOW - timedelta(days=offset)
+        )
+
+    series = earnings_by_day(db_session, [kiosk.id])
+    total = earnings_for_kiosks(db_session, [kiosk.id])
+
+    assert sum(row.earnings.gross_inr for row in series) == total.gross_inr
+    assert sum(row.earnings.order_count for row in series) == total.order_count
+
+
+def test_a_quiet_day_between_two_busy_ones_is_a_zero_and_not_a_gap(
+    db_session, gateway, student, kiosk
+):
+    """A missing day renders as a bar next to the wrong neighbour, which reads
+    as a busy Tuesday when Tuesday took nothing."""
+    a_capture(
+        db_session,
+        gateway,
+        student,
+        kiosk,
+        "10.00",
+        at=datetime(2026, 8, 18, 9, 0, tzinfo=UTC),
+    )
+    a_capture(
+        db_session,
+        gateway,
+        student,
+        kiosk,
+        "10.00",
+        at=datetime(2026, 8, 20, 9, 0, tzinfo=UTC),
+    )
+
+    series = earnings_by_day(db_session, [kiosk.id])
+
+    assert [row.day for row in series] == [
+        date(2026, 8, 18),
+        date(2026, 8, 19),
+        date(2026, 8, 20),
+    ]
+    assert series[1].earnings.gross_inr == Decimal("0.00")
+    assert series[1].earnings.order_count == 0
+
+
+def test_a_day_ends_where_the_shop_is(db_session, gateway, student, kiosk):
+    """Half past eight in the evening UTC is two in the morning in India, and
+    the shopkeeper counting yesterday's takings means the day their shop was
+    open. Bucketing in UTC puts a late sale on the day before."""
+    a_capture(
+        db_session,
+        gateway,
+        student,
+        kiosk,
+        "15.00",
+        at=datetime(2026, 8, 18, 20, 30, tzinfo=UTC),
+    )
+
+    series = earnings_by_day(db_session, [kiosk.id])
+
+    assert [row.day for row in series] == [date(2026, 8, 19)]
+
+
+def test_a_refund_shows_against_the_day_the_money_arrived(
+    db_session, gateway, student, kiosk
+):
+    """The same rule the window total uses: `refunded_inr` is a running column
+    on the payment, so it belongs to the payment's day. Any other answer would
+    make the series stop adding up to the total."""
+    payment = a_capture(
+        db_session,
+        gateway,
+        student,
+        kiosk,
+        "50.00",
+        at=datetime(2026, 8, 18, 9, 0, tzinfo=UTC),
+    )
+    refund(
+        db_session,
+        payment=payment,
+        amount=Decimal("20.00"),
+        destination=RefundDestination.SOURCE,
+        idempotency_key="day-partial",
+        razorpay=gateway,
+        credentials=Credentials("rzp_test", "secret"),
+    )
+    db_session.flush()
+
+    series = earnings_by_day(db_session, [kiosk.id])
+
+    assert series[0].earnings.refunded_inr == Decimal("20.00")
+    assert series[0].earnings.net_inr == Decimal("30.00")
+
+
+def test_a_window_narrows_the_series(db_session, gateway, student, kiosk):
+    a_capture(db_session, gateway, student, kiosk, "10.00", at=NOW - timedelta(days=10))
+    a_capture(db_session, gateway, student, kiosk, "10.00", at=NOW)
+
+    series = earnings_by_day(db_session, [kiosk.id], since=NOW - timedelta(days=1))
+
+    assert len(series) == 1
+
+
+def test_no_takings_at_all_is_an_empty_series(db_session, kiosk):
+    assert earnings_by_day(db_session, [kiosk.id]) == []
+
+
+def test_no_kiosks_is_an_empty_series(db_session):
+    assert earnings_by_day(db_session, []) == []

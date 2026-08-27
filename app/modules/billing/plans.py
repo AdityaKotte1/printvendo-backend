@@ -158,6 +158,18 @@ def all_plans(db: Session) -> list[Plan]:
     return list(db.execute(select(Plan).order_by(Plan.monthly_price)).scalars())
 
 
+def plan_named(db: Session, plan_id: int) -> str:
+    """What to call this plan on a document.
+
+    A name rather than the row, and never a raise: a plan retired years after
+    somebody bought it must not turn their invoice into a 500. `Subscription`
+    has no relationship to `Plan` on purpose -- the api layer may not touch
+    either table -- so this is how a document gets the word.
+    """
+    plan = db.get(Plan, plan_id)
+    return plan.name if plan is not None else "Subscription"
+
+
 def plan_by_public_id(db: Session, public_id: str) -> Plan:
     """The plan with this id, retired or not.
 
