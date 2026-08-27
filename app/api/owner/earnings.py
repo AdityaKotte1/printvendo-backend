@@ -23,22 +23,27 @@ from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
+    CurrentUser,
     KioskScope,
     get_db,
     require_any_role,
-    require_role,
 )
 from app.api.schemas import (
+    DayEarningsResponse,
     EarningsResponse,
     KioskEarningsResponse,
     OwnerOrderResponse,
 )
 from app.core.errors import BadRequest
-from app.modules.identity import User
 from app.modules.identity.roles import Role
 from app.modules.kiosks import repository as kiosk_repo
 from app.modules.orders import orders_at_kiosks, paid_orders_at_kiosks
-from app.modules.payments import Earnings, earnings_by_kiosk, earnings_for_kiosks
+from app.modules.payments import (
+    Earnings,
+    earnings_by_day,
+    earnings_by_kiosk,
+    earnings_for_kiosks,
+)
 
 router = APIRouter(
     prefix="/v1/owner",
@@ -73,7 +78,12 @@ EXPORT_COLUMNS = (
     "refunded_at",
 )
 
-CurrentOwner = Annotated[User, Depends(require_role(Role.OWNER))]
+# Not `require_role(Role.OWNER)`. The router above already refuses anyone who
+# is neither an owner nor an admin, and narrowing again here refused the admin
+# the matrix promises -- which is how these four routes came to 403 an admin
+# while `tests/authz/matrix.py` said {OWNER, ADMIN}. `kiosk_scope` is what
+# decides which shops are behind the door, and for an admin that is all of
+# them. Every other owner router already does it this way.
 
 
 def _as_earnings(earnings: Earnings) -> EarningsResponse:
@@ -87,7 +97,7 @@ def _as_earnings(earnings: Earnings) -> EarningsResponse:
 
 @router.get("/earnings", response_model=EarningsResponse)
 def my_earnings(
-    owner: CurrentOwner,
+    owner: CurrentUser,
     scope: KioskScope,
     db: Annotated[Session, Depends(get_db)],
     since: datetime | None = None,
@@ -107,7 +117,7 @@ def my_earnings(
 
 @router.get("/earnings/by-kiosk", response_model=list[KioskEarningsResponse])
 def my_earnings_by_kiosk(
-    owner: CurrentOwner,
+    owner: CurrentUser,
     scope: KioskScope,
     db: Annotated[Session, Depends(get_db)],
     since: datetime | None = None,
@@ -131,10 +141,45 @@ def my_earnings_by_kiosk(
     ]
 
 
+@router.get("/earnings/daily", response_model=list[DayEarningsResponse])
+def my_earnings_by_day(
+    owner: CurrentUser,
+    scope: KioskScope,
+    db: Annotated[Session, Depends(get_db)],
+    kiosk_id: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> list[DayEarningsResponse]:
+    """The same window, day by day, for a chart.
+
+    A real endpoint rather than a series each console adds up for itself. The
+    admin console built one in the browser out of the order export -- which
+    caps at a row count, buckets in UTC and cannot see a refund -- and the owner
+    app was about to build a second. Two implementations of "what did this shop
+    take on Tuesday" is the shape of every defect in the legacy audit, so there
+    is one, and it is the arithmetic that already produces the total.
+
+    `kiosk_id` narrows it to one shop, through the same resolver as everything
+    else here: a kiosk the caller does not hold is 404, byte-identical to one
+    that never existed.
+    """
+    if kiosk_id is not None:
+        kiosk_ids = [kiosk_repo.get_kiosk(db, scope, kiosk_id).id]
+    else:
+        kiosk_ids = [
+            kiosk.id for kiosk in kiosk_repo.list_kiosks(db, scope, include_inactive=True)
+        ]
+
+    return [
+        DayEarningsResponse(day=row.day, earnings=_as_earnings(row.earnings))
+        for row in earnings_by_day(db, kiosk_ids, since=since, until=until)
+    ]
+
+
 @router.get("/kiosks/{kiosk_id}/orders", response_model=list[OwnerOrderResponse])
 def kiosk_orders(
     kiosk_id: str,
-    owner: CurrentOwner,
+    owner: CurrentUser,
     scope: KioskScope,
     db: Annotated[Session, Depends(get_db)],
     limit: Annotated[int, Query(le=200)] = 50,
@@ -167,7 +212,7 @@ def kiosk_orders(
 @router.get("/kiosks/{kiosk_id}/orders/export")
 def export_kiosk_orders(
     kiosk_id: str,
-    owner: CurrentOwner,
+    owner: CurrentUser,
     scope: KioskScope,
     db: Annotated[Session, Depends(get_db)],
     since: datetime | None = None,

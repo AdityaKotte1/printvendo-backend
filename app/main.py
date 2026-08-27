@@ -112,12 +112,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from app.api.admin import payment_config as admin_payment_config
     from app.api.admin import refunds as admin_refunds
     from app.api.device import agent as device_agent
+    from app.api.device import commands as device_commands
     from app.api.device import tasks as device_tasks
     from app.api.device import ws as device_ws
     from app.api.owner import billing as owner_billing
     from app.api.owner import earnings as owner_earnings
     from app.api.owner import kiosks as owner_kiosks
     from app.api.owner import payment_config as owner_payment_config
+    from app.api.owner import refunds as owner_refunds
     from app.api.refiller import kiosks as refiller_kiosks
     from app.api.student import auth as student_auth
     from app.api.student import documents as student_documents
@@ -136,6 +138,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(owner_earnings.router)
     app.include_router(owner_billing.router)
     app.include_router(owner_payment_config.router)
+    app.include_router(owner_refunds.router)
     app.include_router(refiller_kiosks.router)
     app.include_router(admin_payment_config.router)
     app.include_router(admin_ops.router)
@@ -144,6 +147,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(admin_accounts.router)
     app.include_router(admin_refunds.router)
     app.include_router(device_agent.router)
+    app.include_router(device_commands.router)
     app.include_router(device_tasks.router)
     app.include_router(device_ws.router)
     app.include_router(webhooks.router)

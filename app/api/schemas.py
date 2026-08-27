@@ -9,7 +9,7 @@ Two rules encoded here rather than trusted to each handler:
   public one.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
@@ -200,6 +200,32 @@ class DeviceStatusResponse(BaseModel):
     agent_version: str | None
     last_heartbeat_at: datetime | None
     online: bool
+    # Set when the machine itself reported that it could not finish a job, and
+    # is therefore why the shop is currently shut. An owner looking at a kiosk
+    # in maintenance needs to know whether they put it there.
+    stuck_since: datetime | None = None
+
+
+class DeviceCommandRequest(BaseModel):
+    """Ask this kiosk's machine to restart something.
+
+    `restart_printing` is CUPS on a Pi and the Print Spooler on Windows: one
+    request, and the machine knows which of those it has. There is nothing here
+    for Ghostscript -- a copy of it runs for one file and exits, so there is no
+    service to restart and a button for it would be a placebo.
+    """
+
+    command: Literal["restart_agent", "restart_printing"]
+
+
+class DeviceCommandResponse(BaseModel):
+    id: str
+    command: str
+    state: str
+    error_message: str | None
+    requested_at: datetime
+    sent_at: datetime | None
+    finished_at: datetime | None
 
 
 class EnrolmentCodeResponse(BaseModel):
@@ -426,6 +452,18 @@ class KioskEarningsResponse(BaseModel):
     earnings: EarningsResponse
 
 
+class DayEarningsResponse(BaseModel):
+    """One day of the same four numbers.
+
+    Nested rather than flattened, so a day and the window total are visibly the
+    same shape: whatever renders one renders the other, and a field added to
+    earnings appears in both or in neither.
+    """
+
+    day: date
+    earnings: EarningsResponse
+
+
 class OwnerOrderResponse(BaseModel):
     """One job printed at an owner's shop.
 
@@ -639,6 +677,25 @@ class RefundRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=300)
 
 
+class OwnerRefundRequest(BaseModel):
+    """What a shop gives back.
+
+    **There is no destination field, and that absence is the rule.** An owner
+    refunds money their own Razorpay account collected, and money that went
+    into a shop's own account can only come back out of it -- crediting a
+    Printvendo balance would be the platform promising to honour rupees it
+    never held. A field the request cannot carry is a rule that cannot be
+    relaxed by remembering to check something.
+    """
+
+    # Required, never generated server-side: a request that timed out is
+    # retried with the same key and returns the refund it already made.
+    idempotency_key: str = Field(min_length=8, max_length=120)
+    # Omitted means everything still owed, which is the case by a wide margin.
+    amount_inr: Decimal | None = None
+    reason: str | None = Field(default=None, max_length=300)
+
+
 class RefundResponse(BaseModel):
     id: str
     payment_id: str
@@ -728,6 +785,11 @@ class MyBillingResponse(BaseModel):
 
     subscription: MySubscriptionResponse | None
     plans: list[PlanResponse]
+    # Everything ever bought, newest first, including what is in force. "Am I
+    # covered" and "where is last year's invoice" are different questions, and
+    # `subscription` only answers the first -- so the second had nowhere to be
+    # asked and the invoice had nothing to hang off.
+    history: list[MySubscriptionResponse] = []
 
 
 class SubscriptionQuoteResponse(BaseModel):

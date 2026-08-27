@@ -92,12 +92,21 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     # surface, it is the same routes with a wider kiosk scope.
     ("GET", "/v1/owner/earnings"): {OWNER, ADMIN},
     ("GET", "/v1/owner/earnings/by-kiosk"): {OWNER, ADMIN},
+    ("GET", "/v1/owner/earnings/daily"): {OWNER, ADMIN},
     ("GET", "/v1/owner/kiosks/{kiosk_id}/orders"): {OWNER, ADMIN},
     # The same list as a file, for accounts. Same scope, same audience, and
     # the same absence of any student: a CSV is built by hand rather than from
     # a response type, so what the type guarantees above, a test guarantees
     # there.
     ("GET", "/v1/owner/kiosks/{kiosk_id}/orders/export"): {OWNER, ADMIN},
+    # Giving back money your own account collected. **OWNER alone** -- the one
+    # route in this router where admin is not alongside, because this one is
+    # not about kiosk scope. A shop refunds its own takings out of its own
+    # Razorpay; an admin has collected nothing, so the rule could only ever
+    # refuse them, and platform money goes back through
+    # `/v1/admin/orders/{order_id}/refund` instead. A student must never reach
+    # it either: refunding the order you placed is not a thing the payer may do.
+    ("POST", "/v1/owner/kiosks/{kiosk_id}/orders/{order_id}/refund"): {OWNER},
     # ── owner payment configuration ─────────────────────────────────────────
     # OWNER only, and not ADMIN: these act on *the caller's own* Razorpay
     # account, resolved from their token. An admin reaching them would be
@@ -111,6 +120,15 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     ("GET", "/v1/owner/billing"): {OWNER, ADMIN},
     ("GET", "/v1/owner/billing/quote"): {OWNER, ADMIN},
     ("POST", "/v1/owner/billing/subscription"): {OWNER, ADMIN},
+    # The browser coming back from Razorpay. Same audience as buying, and
+    # scoped to the caller's own subscription -- the signature is what
+    # authorises the capture, and it is checked against the platform key.
+    ("POST", "/v1/owner/billing/subscription/{subscription_id}/verify"): {OWNER, ADMIN},
+    # The invoice for what you paid, as bytes from an authenticated route
+    # rather than a URL -- the same rule as the student receipt and the
+    # account-ownership proof. Scoped to the caller's own subscription, because
+    # it carries a name, an address and what somebody pays for their software.
+    ("GET", "/v1/owner/billing/subscription/{subscription_id}/invoice"): {OWNER, ADMIN},
     ("GET", "/v1/owner/payment-config"): {OWNER},
     ("PUT", "/v1/owner/payment-config/keys"): {OWNER},
     ("PUT", "/v1/owner/payment-config/webhook-secret"): {OWNER},
@@ -132,6 +150,12 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     # owner/admin action on a kiosk they already hold -- which is what makes the
     # public /v1/device/register safe.
     ("GET", "/v1/owner/kiosks/{kiosk_id}/device"): {OWNER, ADMIN},
+    # Restarting the machine in a shop. OWNER and ADMIN, through one route:
+    # the old backend had this twice -- once for an owner and a second copy in
+    # `pi.py` for an admin -- and they drifted. Admin is a wider scope here, as
+    # it is everywhere else in this router.
+    ("POST", "/v1/owner/kiosks/{kiosk_id}/device/commands"): {OWNER, ADMIN},
+    ("GET", "/v1/owner/kiosks/{kiosk_id}/device/commands"): {OWNER, ADMIN},
     ("POST", "/v1/owner/kiosks/{kiosk_id}/device/enrol"): {OWNER, ADMIN},
     ("DELETE", "/v1/owner/kiosks/{kiosk_id}/device"): {OWNER, ADMIN},
     ("GET", "/v1/owner/kiosks/{kiosk_id}/staff"): {OWNER, ADMIN},
@@ -229,6 +253,14 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     # kiosk -- no device route takes a kiosk id, so there is nothing to confuse.
     ("POST", "/v1/device/heartbeat"): {DEVICE},
     ("POST", "/v1/device/tasks/next"): {DEVICE},
+    # What an operator has asked this machine to do, and how it went. Claimed
+    # over HTTP like a print task, for the same reason: the socket carries a
+    # wake and never work.
+    ("POST", "/v1/device/commands/next"): {DEVICE},
+    ("POST", "/v1/device/commands/{command_id}/result"): {DEVICE},
+    # "I cannot get this out of the printer", which closes the shop. DEVICE
+    # only: it is a claim about one kiosk, and the token is which kiosk.
+    ("POST", "/v1/device/printer-health"): {DEVICE},
     ("GET", "/v1/device/tasks/{task_id}/file"): {DEVICE},
     ("POST", "/v1/device/tasks/{task_id}/status"): {DEVICE},
     # The socket. Declared like any other route, under a pseudo-method, because

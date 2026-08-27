@@ -16,13 +16,14 @@ cannot disagree.
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
     CurrentUser,
     get_db,
     get_razorpay,
+    get_secret_box,
     get_settings_from_app,
     require_any_role,
 )
@@ -33,18 +34,27 @@ from app.api.schemas import (
     PlanResponse,
     StartSubscriptionRequest,
     SubscriptionQuoteResponse,
+    VerifyPaymentRequest,
 )
 from app.core.config import Settings
+from app.core.crypto import SecretBox
 from app.core.errors import BadRequest, NotFound
 from app.modules.billing import (
+    InvoiceParty,
     Subscription,
+    activate_subscription,
     active_plans,
     active_subscription,
     effective_end,
+    invoice_number,
     is_on_trial,
     plan_by_public_id,
+    plan_named,
     quote_subscription,
+    render_subscription_invoice,
     start_purchase,
+    subscription_by_public_id,
+    subscriptions_of,
 )
 from app.modules.identity.roles import Role
 from app.modules.payments import (
@@ -52,7 +62,10 @@ from app.modules.payments import (
     Gateway,
     PaymentKind,
     RazorpayGateway,
+    confirm_payment,
     open_checkout,
+    payment_for_razorpay_order,
+    payment_for_subscription,
 )
 
 router = APIRouter(
@@ -63,6 +76,8 @@ router = APIRouter(
 
 NO_PLATFORM_KEYS = "Subscriptions cannot be bought right now. Please try again later."
 NO_SUCH_PLAN = "That plan does not exist."
+NO_SUCH_SUBSCRIPTION = "That subscription does not exist."
+NO_CHECKOUT = "No payment was started for that subscription."
 
 
 def _as_subscription(subscription: Subscription | None) -> MySubscriptionResponse | None:
@@ -96,6 +111,13 @@ def my_billing(
     """
     return MyBillingResponse(
         subscription=_as_subscription(active_subscription(db, owner.id)),
+        history=[
+            row
+            for row in (
+                _as_subscription(s) for s in subscriptions_of(db, owner.id)
+            )
+            if row is not None
+        ],
         plans=[
             PlanResponse(
                 id=plan.public_id,
@@ -203,4 +225,125 @@ def buy_subscription(
         razorpay_key_id=settings.RAZORPAY_KEY_ID,
         amount_inr=payment.amount_inr,
         order_id=subscription.public_id,
+    )
+
+
+@router.post("/subscription/{subscription_id}/verify", response_model=MySubscriptionResponse)
+def verify_subscription_payment(
+    subscription_id: str,
+    body: VerifyPaymentRequest,
+    owner: CurrentUser,
+    db: Annotated[Session, Depends(get_db)],
+    box: Annotated[SecretBox, Depends(get_secret_box)],
+    settings: Annotated[Settings, Depends(get_settings_from_app)],
+) -> MySubscriptionResponse:
+    """The browser coming back from Razorpay, checked against the platform key.
+
+    The webhook settles this too, and either may arrive first. Both were always
+    meant to -- but until this route existed the webhook was the only path, so
+    an owner who had just paid sat on a page that said "not active" for as long
+    as the delivery took, or for ever if their endpoint was misconfigured. A
+    purchase that can only complete out of sight is a button somebody presses
+    twice.
+
+    A callback that does not verify changes nothing at all: no capture, no term,
+    no open payment gate. That matters more here than for a print, because a
+    subscription in force is half of what lets a shop collect real money -- a
+    forged receipt would be a shop turning its own takings on.
+
+    The signature is checked against the **platform's** key secret, because a
+    subscription is always collected by the platform. Reading the owner's keys
+    here would let a shop sign its own subscription into force.
+    """
+    subscription = subscription_by_public_id(db, subscription_id)
+    # Somebody else's is the same answer as one that never existed. A 403 would
+    # tell one owner something true about another.
+    if subscription is None or subscription.user_id != owner.id:
+        raise NotFound(NO_SUCH_SUBSCRIPTION)
+
+    payment = payment_for_razorpay_order(db, body.razorpay_order_id)
+    # The subscription is named on the payment, so a genuine receipt for a
+    # different purchase cannot start this one's term.
+    if payment is None or payment.subscription_id != subscription.id:
+        raise NotFound(NO_CHECKOUT)
+
+    confirm_payment(
+        db,
+        payment,
+        razorpay_payment_id=body.razorpay_payment_id,
+        signature=body.razorpay_signature,
+        key_secret=settings.RAZORPAY_KEY_SECRET,
+    )
+
+    # Idempotent: an already-active subscription is returned untouched rather
+    # than having its term extended a second time, which is what makes it safe
+    # for this and the webhook to race.
+    activate_subscription(db, subscription)
+    return _as_subscription(subscription)
+
+
+@router.get("/subscription/{subscription_id}/invoice")
+def subscription_invoice(
+    subscription_id: str,
+    owner: CurrentUser,
+    db: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings_from_app)],
+) -> Response:
+    """The invoice for a subscription that has been paid for, as a PDF.
+
+    **Bytes from an authenticated route, never a URL.** The same rule as the
+    student receipt and the account-ownership proof: a document served from a
+    guessable path is a document anybody can read, and one that 404s behind an
+    image tag looks exactly like one that was never uploaded.
+
+    Only the caller's own. An invoice carries a name, an address and what
+    somebody pays for their software, so another owner's is a 404 -- the same
+    answer as a subscription that never existed.
+
+    The issuer comes from configuration rather than from a constant: whose name
+    is at the top is a legal detail that changes without the software changing,
+    and an invoice is the one document here a third party may hold us to.
+    """
+    subscription = subscription_by_public_id(db, subscription_id)
+    if subscription is None or subscription.user_id != owner.id:
+        raise NotFound(NO_SUCH_SUBSCRIPTION)
+
+    payment = payment_for_subscription(db, subscription.id)
+
+    pdf = render_subscription_invoice(
+        subscription,
+        plan_name=plan_named(db, subscription.plan_id),
+        billed_to=InvoiceParty(
+            name=owner.full_name or owner.email,
+            email=owner.email,
+            # Whatever else is on file. Today an account holds a name and an
+            # address is not among the things it holds -- see the note in
+            # `billing/invoice.py`. The renderer prints what it is handed, so
+            # the day one is stored this is the only line that changes.
+            lines=(),
+        ),
+        billed_by=InvoiceParty(
+            name=settings.INVOICE_ISSUER_NAME,
+            email=settings.INVOICE_ISSUER_EMAIL,
+            lines=tuple(
+                line.strip()
+                for line in settings.INVOICE_ISSUER_LINES.split("|")
+                if line.strip()
+            ),
+        ),
+        paid_at=payment.captured_at if payment else None,
+        payment_reference=payment.razorpay_payment_id if payment else None,
+    )
+
+    number = invoice_number(subscription)
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            # Named by the invoice number printed on it, so a downloads folder
+            # of these can be matched to a ledger without opening each one.
+            # The number is our own id and carries nothing somebody else typed,
+            # so it cannot rewrite the response headers.
+            "Content-Disposition": f'attachment; filename="{number}.pdf"'
+        },
     )

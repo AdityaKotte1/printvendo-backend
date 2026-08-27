@@ -140,6 +140,27 @@ def find_by_email(db: Session, email: str) -> list[User]:
     return list(db.execute(stmt).scalars())
 
 
+def holders_of(db: Session, role: Role) -> list[User]:
+    """Everyone holding this role, **including deactivated accounts**.
+
+    Deactivated ones are included for the same reason `find_by_email` includes
+    them: switching somebody off is exactly when an operator needs to find
+    them, and an account that plainly exists answering "no such account" is how
+    somebody concludes the console is broken.
+
+    Oldest first, so a list an operator has looked at twice is in the same
+    order both times. There is deliberately no equivalent for every account at
+    once -- see `find_by_email`.
+    """
+    stmt = (
+        select(User)
+        .join(UserRole, UserRole.user_id == User.id)
+        .where(UserRole.role == role)
+        .order_by(User.id)
+    )
+    return list(db.execute(stmt).scalars())
+
+
 def get_any_by_public_id(db: Session, public_id: str) -> User | None:
     """Account with this public id, **active or not**, or None.
 

@@ -32,6 +32,9 @@ SETTINGS = Settings(
     RAZORPAY_KEY_ID="rzp_test_platform",
     RAZORPAY_KEY_SECRET="platform_secret",
     CORS_ORIGINS="http://localhost:3000",
+    INVOICE_ISSUER_NAME="Printvendo",
+    INVOICE_ISSUER_LINES="Printvendo Technologies|12 MG Road, Bengaluru 560001",
+    INVOICE_ISSUER_EMAIL="billing@printvendo.com",
 )
 
 
@@ -293,3 +296,324 @@ def test_a_payment_with_nothing_attached_is_logged_rather_than_raised(
         WebhookSettlement().settle_subscription(db_session, orphan)
 
     assert "nothing to activate" in caplog.text
+
+
+# ── the browser coming back ─────────────────────────────────────────────────
+#
+# The webhook is not the only way a capture arrives, and it must not be the only
+# way one settles. An owner who has just paid is looking at a page; the webhook
+# may be seconds away or, if the endpoint is misconfigured, never. A purchase
+# that can only complete out of sight is a button somebody presses twice.
+
+
+def _signature(order_id: str, payment_id: str, secret: str) -> str:
+    import hashlib
+    import hmac
+
+    return hmac.new(
+        secret.encode(), f"{order_id}|{payment_id}".encode(), hashlib.sha256
+    ).hexdigest()
+
+
+def _bought(client, auth, plan) -> dict:
+    return client.post(
+        "/v1/owner/billing/subscription",
+        headers=auth,
+        json={"plan_id": plan.public_id, "duration_months": 6},
+    ).json()
+
+
+def test_the_browsers_callback_puts_the_subscription_in_force(
+    client, auth, plan, db_session
+):
+    checkout = _bought(client, auth, plan)
+
+    response = client.post(
+        f"/v1/owner/billing/subscription/{checkout['order_id']}/verify",
+        headers=auth,
+        json={
+            "razorpay_order_id": checkout["razorpay_order_id"],
+            "razorpay_payment_id": "pay_sub_1",
+            "razorpay_signature": _signature(
+                checkout["razorpay_order_id"], "pay_sub_1", "platform_secret"
+            ),
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "active"
+    assert response.json()["covered_until"] is not None
+
+
+def test_a_forged_callback_changes_nothing(client, auth, plan, db_session):
+    """The same rule as a print order: a callback that does not verify moves no
+    money and starts no term, so a shop cannot turn its own takings on by
+    posting a made-up receipt."""
+    checkout = _bought(client, auth, plan)
+
+    response = client.post(
+        f"/v1/owner/billing/subscription/{checkout['order_id']}/verify",
+        headers=auth,
+        json={
+            "razorpay_order_id": checkout["razorpay_order_id"],
+            "razorpay_payment_id": "pay_sub_2",
+            "razorpay_signature": "not-a-signature",
+        },
+    )
+
+    assert response.status_code == 400
+    assert db_session.query(Subscription).one().status is SubscriptionStatus.PENDING_PAYMENT
+
+
+def test_somebody_elses_subscription_is_not_found(client, auth, plan, db_session):
+    """A subscription belongs to whoever bought it. Another owner's is 404 --
+    the same answer as one that never existed."""
+    stranger = User(email="stranger@example.com", hashed_password="x")
+    db_session.add(stranger)
+    db_session.flush()
+    identity_repo.grant_role(db_session, stranger.id, Role.OWNER)
+    theirs = Subscription(
+        user_id=stranger.id,
+        plan_id=plan.id,
+        duration_months=1,
+        monthly_price_charged=Decimal("1000.00"),
+        total_amount=Decimal("1000.00"),
+        status=SubscriptionStatus.PENDING_PAYMENT,
+    )
+    db_session.add(theirs)
+    db_session.flush()
+
+    response = client.post(
+        f"/v1/owner/billing/subscription/{theirs.public_id}/verify",
+        headers=auth,
+        json={
+            "razorpay_order_id": "order_x",
+            "razorpay_payment_id": "pay_x",
+            "razorpay_signature": "x",
+        },
+    )
+
+    assert response.status_code == 404
+    # The sentence, not just the code: a route that does not exist answers 404
+    # as well, and a test that cannot tell them apart passes before the feature
+    # is written.
+    assert response.json()["detail"] == "That subscription does not exist."
+
+
+def test_a_receipt_for_something_else_cannot_buy_a_subscription(
+    client, auth, plan, db_session, owner
+):
+    """A genuine, correctly signed receipt — for a different payment.
+
+    Both ids are inside the signed string, so a signature cannot be moved
+    between payments; what this pins is the step after that. The payment names
+    the subscription it bought, and a receipt naming none of them must not start
+    a six-month term. Without that check an owner could top up their wallet by a
+    rupee and present the receipt here.
+    """
+    from app.modules.payments.models import Payment, PaymentKind, PaymentSource
+
+    checkout = _bought(client, auth, plan)
+    topup = Payment(
+        user_id=owner.id,
+        kind=PaymentKind.WALLET_TOPUP,
+        source=PaymentSource.PLATFORM_GATEWAY,
+        razorpay_order_id="order_topup",
+        amount_inr=Decimal("1.00"),
+    )
+    db_session.add(topup)
+    db_session.flush()
+
+    response = client.post(
+        f"/v1/owner/billing/subscription/{checkout['order_id']}/verify",
+        headers=auth,
+        json={
+            "razorpay_order_id": "order_topup",
+            "razorpay_payment_id": "pay_sub_3",
+            "razorpay_signature": _signature(
+                "order_topup", "pay_sub_3", "platform_secret"
+            ),
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "No payment was started for that subscription."
+    assert db_session.query(Subscription).one().status is SubscriptionStatus.PENDING_PAYMENT
+
+
+def test_the_browser_and_the_webhook_settle_the_same_capture_once(
+    client, auth, plan, db_session
+):
+    """Whichever arrives first wins; the second is refused by the unique payment
+    id rather than buying a second term."""
+    from app.modules.payments.models import Payment
+
+    checkout = _bought(client, auth, plan)
+    signature = _signature(checkout["razorpay_order_id"], "pay_sub_4", "platform_secret")
+    body = {
+        "razorpay_order_id": checkout["razorpay_order_id"],
+        "razorpay_payment_id": "pay_sub_4",
+        "razorpay_signature": signature,
+    }
+    client.post(
+        f"/v1/owner/billing/subscription/{checkout['order_id']}/verify",
+        headers=auth,
+        json=body,
+    )
+    expires = db_session.query(Subscription).one().expires_at
+
+    from app.api.deps import WebhookSettlement
+
+    WebhookSettlement().settle_subscription(db_session, db_session.query(Payment).one())
+
+    assert db_session.query(Subscription).one().expires_at == expires
+
+
+# ── the paper an owner files ────────────────────────────────────────────────
+#
+# The legacy owner app had a printable invoice; the rewire dropped it because
+# the endpoint behind it did not survive. A shop that pays for software needs a
+# document saying what it paid for, and this is bytes from an authenticated
+# route rather than a URL -- the same rule as the student receipt and the
+# account-ownership proof, and for the same reason: the old dashboard built
+# links, and a document that failed to load looked exactly like one that was
+# never there.
+
+
+def _pdf_text(body: bytes) -> str:
+    import io
+
+    from pypdf import PdfReader
+
+    reader = PdfReader(io.BytesIO(body))
+    return "\n".join(page.extract_text() or "" for page in reader.pages)
+
+
+def _paid_subscription(client, auth, plan, db_session):
+    """Buy one and let the browser settle it, exactly as an owner would."""
+    checkout = client.post(
+        "/v1/owner/billing/subscription",
+        headers=auth,
+        json={"plan_id": plan.public_id, "duration_months": 6},
+    ).json()
+    client.post(
+        f"/v1/owner/billing/subscription/{checkout['order_id']}/verify",
+        headers=auth,
+        json={
+            "razorpay_order_id": checkout["razorpay_order_id"],
+            "razorpay_payment_id": "pay_invoice_1",
+            "razorpay_signature": _signature(
+                checkout["razorpay_order_id"], "pay_invoice_1", "platform_secret"
+            ),
+        },
+    )
+    return checkout["order_id"]
+
+
+def test_an_owner_downloads_the_invoice_for_what_they_paid(
+    client, auth, plan, db_session, owner
+):
+    subscription_id = _paid_subscription(client, auth, plan, db_session)
+
+    response = client.get(
+        f"/v1/owner/billing/subscription/{subscription_id}/invoice", headers=auth
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("application/pdf")
+
+    text = _pdf_text(response.content)
+    assert "Pro" in text
+    assert "6,000.00" in text
+    assert owner.email in text
+    # The reference that matches this document to a line on a bank statement.
+    assert "pay_invoice_1" in text
+
+
+def test_the_invoice_is_named_by_its_own_number(client, auth, plan, db_session):
+    """A downloads folder full of `invoice.pdf` is a downloads folder with one
+    invoice in it. The filename is the number printed on the document, so the
+    two can be matched without opening it."""
+    subscription_id = _paid_subscription(client, auth, plan, db_session)
+
+    response = client.get(
+        f"/v1/owner/billing/subscription/{subscription_id}/invoice", headers=auth
+    )
+
+    assert subscription_id.upper() in response.headers["content-disposition"]
+
+
+def test_a_subscription_nobody_has_paid_for_has_no_invoice_yet(
+    client, auth, plan, db_session
+):
+    """It is a quote until the money arrives. A document headed TOTAL PAID
+    against a pending purchase is one somebody can wave at a shop."""
+    checkout = client.post(
+        "/v1/owner/billing/subscription",
+        headers=auth,
+        json={"plan_id": plan.public_id, "duration_months": 6},
+    ).json()
+
+    response = client.get(
+        f"/v1/owner/billing/subscription/{checkout['order_id']}/invoice", headers=auth
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "That subscription has not been paid for, so there is no invoice for it yet."
+    )
+
+
+def test_another_owners_invoice_is_not_found(client, auth, plan, db_session):
+    """An invoice carries a name, an email and what somebody pays. Somebody
+    else's is 404 -- the same answer as one that never existed."""
+    stranger = User(email="stranger-invoice@example.com", hashed_password="x")
+    db_session.add(stranger)
+    db_session.flush()
+    identity_repo.grant_role(db_session, stranger.id, Role.OWNER)
+    theirs = Subscription(
+        user_id=stranger.id,
+        plan_id=plan.id,
+        duration_months=1,
+        monthly_price_charged=Decimal("1000.00"),
+        total_amount=Decimal("1000.00"),
+        status=SubscriptionStatus.ACTIVE,
+    )
+    db_session.add(theirs)
+    db_session.flush()
+
+    response = client.get(
+        f"/v1/owner/billing/subscription/{theirs.public_id}/invoice", headers=auth
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "That subscription does not exist."
+
+
+def test_the_invoice_carries_the_issuer_from_configuration(
+    client, auth, plan, db_session
+):
+    """Whose name is at the top is a legal detail that changes without the
+    software changing, so it is configuration rather than a constant."""
+    subscription_id = _paid_subscription(client, auth, plan, db_session)
+
+    text = _pdf_text(
+        client.get(
+            f"/v1/owner/billing/subscription/{subscription_id}/invoice", headers=auth
+        ).content
+    )
+
+    assert "Printvendo Technologies" in text
+    assert "Bengaluru 560001" in text
+
+
+def test_the_owners_past_subscriptions_are_listed_so_they_can_be_invoiced(
+    client, auth, plan, db_session
+):
+    """`/billing` returned only what is in force, which is the right answer to
+    "am I covered" and no answer at all to "where is last year's invoice"."""
+    _paid_subscription(client, auth, plan, db_session)
+
+    body = client.get("/v1/owner/billing", headers=auth).json()
+
+    assert [row["id"] for row in body["history"]] == [body["subscription"]["id"]]

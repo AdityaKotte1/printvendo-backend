@@ -11,6 +11,12 @@ Three rules here are the point of the router:
 * **The search is exact, never a prefix.** A console that answers partial
   addresses is a directory of every user on the platform, walkable by whoever
   reaches it. There is no "list everyone" route for the same reason.
+* **A role may be listed; STUDENT may not.** Owners, refillers and admins are
+  the handful of people an operator administers -- already named on kiosks the
+  same admin can list -- and requiring somebody to remember ten addresses to
+  look after ten shops is not security, it is a console nobody can use.
+  Students are the directory the rule above is actually about, so `role=student`
+  is refused in the same sentence that says how to find one.
 * **Deactivating ends access now.** `get_by_public_id` refuses an inactive
   account, so the access token dies with the row rather than fifteen minutes
   later, and `set_active` revokes the refresh family on the way out.
@@ -42,6 +48,19 @@ NOT_YOURSELF = (
     "there is always somebody who can."
 )
 NOT_YOUR_OWN_ACCOUNT = "You cannot deactivate your own account."
+
+# Which roles are a set an operator manages, rather than the whole user base.
+LISTABLE_ROLES = (Role.OWNER, Role.REFILLER, Role.ADMIN)
+
+NAME_SOMEBODY = (
+    "Search for an exact email address, or list a role: "
+    + ", ".join(role.value for role in LISTABLE_ROLES)
+    + "."
+)
+NO_STUDENT_DIRECTORY = (
+    "Students cannot be listed -- there are too many of them for it to be "
+    "anything but a directory. Search for an exact email address instead."
+)
 
 
 def _as_response(db: Session, user: User) -> AccountResponse:
@@ -76,21 +95,55 @@ def _account(db: Session, account_id: str) -> User:
 def find_accounts(
     admin: CurrentAdmin,
     db: Annotated[Session, Depends(get_db)],
-    email: Annotated[str, Query(min_length=3)],
+    email: Annotated[str | None, Query(min_length=3)] = None,
+    role: str | None = None,
 ) -> list[AccountResponse]:
-    """Look somebody up by their exact address.
+    """Look somebody up by their exact address, or list the people in a role.
 
-    `email` is required -- there is deliberately no answer to "show me
-    everyone". Case-insensitive, because Postgres is not: an admin typing an
-    address with a capital would otherwise be told an account does not exist,
-    which is how the legacy data's case-duplicate accounts came about.
+    **By address**, the match is exact and case-insensitive. Exact because a
+    console that answers prefixes is a directory of the platform; case-
+    insensitive because Postgres is not, and an admin typing an address with a
+    capital would otherwise be told an account does not exist -- which is how
+    the legacy data's case-duplicate accounts came about. A list, because those
+    duplicates exist: ten pairs in production, and hiding the second would hide
+    exactly what the migration has to resolve.
 
-    A list because those duplicates exist: ten pairs in production, and hiding
-    the second one would hide exactly what the migration has to resolve.
+    **By role**, only for the roles an operator administers. There are a few
+    dozen owners and refillers and they are already named on kiosks this same
+    admin can list, so making somebody remember an address per shop buys
+    nothing. `student` is refused, because that is the directory the exactness
+    rule exists to prevent.
+
+    One of the two is required. Neither is not a request for everybody; it is a
+    request that has not said what it wants, and it gets a sentence saying so.
     """
+    if role is not None:
+        return [_as_response(db, user) for user in _by_role(db, role)]
+
+    if email is None:
+        raise BadRequest(NAME_SOMEBODY)
+
     return [
         _as_response(db, user) for user in identity_repo.find_by_email(db, email)
     ]
+
+
+def _by_role(db: Session, role: str) -> list[User]:
+    """The people holding a listable role.
+
+    An unknown role and STUDENT are refused differently on purpose: one is a
+    typo, and the other is a decision somebody should be told about rather than
+    left to conclude the console is broken.
+    """
+    try:
+        wanted = Role(role)
+    except ValueError:
+        raise BadRequest(NAME_SOMEBODY) from None
+
+    if wanted not in LISTABLE_ROLES:
+        raise BadRequest(NO_STUDENT_DIRECTORY)
+
+    return identity_repo.holders_of(db, wanted)
 
 
 @router.get("/{account_id}", response_model=AccountResponse)

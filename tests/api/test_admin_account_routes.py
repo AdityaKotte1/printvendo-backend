@@ -115,9 +115,9 @@ def test_a_partial_address_finds_nobody(client, admin_auth, person):
 
 
 def test_asking_for_nobody_in_particular_is_refused(client, admin_auth, person):
-    """No "list every user" answer, even for an admin: there is no operational
-    question it answers that a search does not."""
-    assert client.get(ACCOUNTS, headers=admin_auth).status_code == 422
+    """No "list every user" answer, even for an admin. Naming a role is not
+    that -- see the listing tests at the foot of this file."""
+    assert client.get(ACCOUNTS, headers=admin_auth).status_code == 400
 
 
 def test_an_account_never_carries_its_password_hash(client, admin_auth, person):
@@ -283,3 +283,76 @@ def test_role_and_status_changes_are_audited(
     granted = next(e for e in trail if e.action == "identity.role.granted")
     assert granted.after["role"] == "admin"
     assert granted.actor_user_id == admin.id
+
+
+# ── listing by role ─────────────────────────────────────────────────────────
+#
+# The exact-address rule exists so this console cannot become a directory of
+# every student on the platform. Owners, refillers and admins are a different
+# set: a handful of people the operator administers, already named on kiosks
+# the same admin can list, and remembering ten addresses to look after ten
+# shops is not security -- it is a console nobody can use.
+#
+# STUDENT stays unlistable, because that *is* the directory the rule is about.
+
+
+def test_owners_can_be_listed(client, admin_auth, db_session):
+    _user(db_session, "shop.one@example.com", Role.OWNER)
+    _user(db_session, "shop.two@example.com", Role.OWNER)
+    _user(db_session, "a.student@example.com", Role.STUDENT)
+
+    response = client.get(f"{ACCOUNTS}?role=owner", headers=admin_auth)
+
+    assert response.status_code == 200
+    assert {a["email"] for a in response.json()} == {
+        "shop.one@example.com",
+        "shop.two@example.com",
+    }
+
+
+def test_a_listed_owner_carries_the_same_card_as_a_search(
+    client, admin_auth, db_session
+):
+    """One shape, so the console renders one card either way."""
+    _user(db_session, "shop.one@example.com", Role.OWNER)
+
+    listed = client.get(f"{ACCOUNTS}?role=owner", headers=admin_auth).json()
+    searched = client.get(
+        f"{ACCOUNTS}?email=shop.one@example.com", headers=admin_auth
+    ).json()
+
+    assert listed == searched
+
+
+def test_students_cannot_be_listed(client, admin_auth, db_session):
+    _user(db_session, "a.student@example.com", Role.STUDENT)
+
+    response = client.get(f"{ACCOUNTS}?role=student", headers=admin_auth)
+
+    assert response.status_code == 400
+    assert "exact" in response.json()["detail"]
+
+
+def test_a_deactivated_owner_is_still_listed(client, admin_auth, db_session):
+    """Switching somebody off is exactly when an operator needs to find them."""
+    stopped = _user(db_session, "stopped@example.com", Role.OWNER)
+    stopped.is_active = False
+    db_session.flush()
+
+    response = client.get(f"{ACCOUNTS}?role=owner", headers=admin_auth)
+
+    assert [a["is_active"] for a in response.json()] == [False]
+
+
+def test_an_unknown_role_is_refused(client, admin_auth):
+    response = client.get(f"{ACCOUNTS}?role=wizard", headers=admin_auth)
+
+    assert response.status_code == 400
+
+
+def test_a_student_still_cannot_reach_the_listing(client, db_session):
+    nosy = _user(db_session, "nosy@example.com", Role.STUDENT)
+
+    response = client.get(f"{ACCOUNTS}?role=owner", headers=_auth(nosy))
+
+    assert response.status_code == 403

@@ -54,6 +54,10 @@ AUDIT_MATRIX: dict[tuple[str, str], tuple[str, str]] = {
     # Money going back is exactly what somebody has to answer for later.
     ("POST", "/v1/admin/orders/{order_id}/refund"): (AUDITED, ""),
     ("POST", "/v1/owner/billing/subscription"): (EXEMPT, RECORDED_ELSEWHERE),
+    ("POST", "/v1/owner/billing/subscription/{subscription_id}/verify"): (
+        EXEMPT,
+        RECORDED_ELSEWHERE,
+    ),
     ("PUT", "/v1/app/kiosks/{kiosk_id}/favourite"): (EXEMPT, SELF_SERVICE),
     ("DELETE", "/v1/app/kiosks/{kiosk_id}/favourite"): (EXEMPT, SELF_SERVICE),
     ("POST", "/v1/app/documents"): (EXEMPT, SELF_SERVICE),
@@ -75,6 +79,10 @@ AUDIT_MATRIX: dict[tuple[str, str], tuple[str, str]] = {
     ("PUT", "/v1/owner/payment-config/webhook-secret"): (AUDITED, ""),
     ("POST", "/v1/owner/payment-config/change-request"): (AUDITED, ""),
     # ── owner: other people's money and other people's access ───────────────
+    # Money going back is exactly what somebody has to answer for later, and an
+    # owner refunding their own shop's takings is the case where that matters
+    # most -- there is no settlement run in which it would otherwise surface.
+    ("POST", "/v1/owner/kiosks/{kiosk_id}/orders/{order_id}/refund"): (AUDITED, ""),
     ("POST", "/v1/owner/kiosks/{kiosk_id}/status"): (AUDITED, ""),
     ("PUT", "/v1/owner/kiosks/{kiosk_id}/pricing"): (AUDITED, ""),
     ("PUT", "/v1/owner/kiosks/{kiosk_id}/paper"): (AUDITED, ""),
@@ -92,6 +100,10 @@ AUDIT_MATRIX: dict[tuple[str, str], tuple[str, str]] = {
     ("POST", "/v1/owner/kiosks/{kiosk_id}/staff/invite"): (AUDITED, ""),
     ("DELETE", "/v1/owner/kiosks/{kiosk_id}/staff/{user_id}"): (AUDITED, ""),
     ("POST", "/v1/owner/kiosks/{kiosk_id}/device/enrol"): (AUDITED, ""),
+    # Restarting somebody's shop machine mid-trade is an action on their
+    # estate, and "the printer came back on its own" and "an admin restarted
+    # it" are different facts about the same afternoon.
+    ("POST", "/v1/owner/kiosks/{kiosk_id}/device/commands"): (AUDITED, ""),
     ("DELETE", "/v1/owner/kiosks/{kiosk_id}/device"): (AUDITED, ""),
     # ── admin ─────────────────────────────────────────────────────────────────────
     # Deciding that an owner may repoint their takings at a different bank
@@ -141,6 +153,16 @@ AUDIT_MATRIX: dict[tuple[str, str], tuple[str, str]] = {
     ("POST", "/v1/device/register"): (EXEMPT, RECORDED_ELSEWHERE),
     ("POST", "/v1/device/heartbeat"): (EXEMPT, DEVICE_TELEMETRY),
     ("POST", "/v1/device/tasks/next"): (EXEMPT, DEVICE_TELEMETRY),
+    # The machine taking an instruction and saying how it went. The decision
+    # that matters -- somebody asking for the restart -- is audited on the
+    # owner side, where there is an actor to record; this end has only a
+    # device, and a row per poll would be the noise this exemption names.
+    ("POST", "/v1/device/commands/next"): (EXEMPT, DEVICE_TELEMETRY),
+    ("POST", "/v1/device/commands/{command_id}/result"): (EXEMPT, DEVICE_TELEMETRY),
+    # A stuck printer closing a shop is loud where it needs to be: it raises an
+    # admin alert, which stands itself down when printing works again. An audit
+    # row per report would be a row a minute from a jammed machine.
+    ("POST", "/v1/device/printer-health"): (EXEMPT, DEVICE_TELEMETRY),
     ("POST", "/v1/device/tasks/{task_id}/status"): (EXEMPT, DEVICE_TELEMETRY),
     # ── webhooks ────────────────────────────────────────────────────────────
     # Razorpay is not an actor with an account. What arrived is recorded as a

@@ -26,6 +26,8 @@ from app.api.deps import (
     require_any_role,
 )
 from app.api.schemas import (
+    DeviceCommandRequest,
+    DeviceCommandResponse,
     DeviceStatusResponse,
     EnrolmentCodeResponse,
     InviteStaffRequest,
@@ -45,6 +47,7 @@ from app.modules.kiosks import (
     AssignmentRole,
     BandSource,
     BillingCheck,
+    DeviceCommandKind,
     Kiosk,
     OnboardingStage,
     device_of,
@@ -53,12 +56,15 @@ from app.modules.kiosks import (
     issue_enrolment_code,
     move_to,
     read_pricing,
+    recent_commands,
+    request_command,
     revoke_device,
     set_pricing,
 )
 from app.modules.kiosks import repository as kiosk_repo
 from app.modules.kiosks.paper import reset_paper, set_paper, sheets_remaining
 from app.modules.kiosks.staffing import invite_staff, list_staff, unassign
+from app.modules.ops import audit
 
 router = APIRouter(
     prefix="/v1/owner/kiosks",
@@ -324,6 +330,7 @@ def device_status(
             agent_version=None,
             last_heartbeat_at=None,
             online=False,
+            stuck_since=None,
         )
 
     return DeviceStatusResponse(
@@ -333,6 +340,7 @@ def device_status(
         agent_version=device.agent_version,
         last_heartbeat_at=device.last_heartbeat_at,
         online=is_online(device),
+        stuck_since=device.stuck_since,
     )
 
 
@@ -369,3 +377,74 @@ def revoke_kiosk_device(
     """
     kiosk = kiosk_repo.get_kiosk(db, scope, kiosk_id)
     revoke_device(db, kiosk)
+
+
+def _as_command(command) -> DeviceCommandResponse:
+    return DeviceCommandResponse(
+        id=command.public_id,
+        command=command.kind.value,
+        state=command.state.value,
+        error_message=command.error_message,
+        requested_at=command.created_at,
+        sent_at=command.sent_at,
+        finished_at=command.finished_at,
+    )
+
+
+@router.post("/{kiosk_id}/device/commands", response_model=DeviceCommandResponse)
+def ask_the_machine(
+    kiosk_id: str,
+    payload: DeviceCommandRequest,
+    user: CurrentUser,
+    scope: KioskScope,
+    db: Annotated[Session, Depends(get_db)],
+) -> DeviceCommandResponse:
+    """Ask this kiosk's machine to restart the agent, or the print service.
+
+    One implementation for both audiences. The backend being replaced had this
+    twice -- `/kiosk/printers/{id}/restart` for an owner and a second copy in
+    `pi.py` for an admin -- and the two drifted. Here admin is a wider scope
+    through the same route, which is what `kiosk_scope` already means
+    everywhere else in this router.
+
+    The command is queued and the machine claims it over HTTP; nothing is
+    pushed down the socket, for the same reason a print task is not. Asking
+    again while one is still waiting returns the one already waiting rather
+    than queueing a second restart to run straight after the first.
+    """
+    kiosk = kiosk_repo.get_kiosk(db, scope, kiosk_id)
+    command = request_command(
+        db,
+        kiosk,
+        DeviceCommandKind(payload.command),
+        requested_by_user_id=user.id,
+    )
+
+    audit.record(
+        db,
+        action="kiosk.device.command.requested",
+        entity_type="kiosk",
+        entity_id=kiosk.public_id,
+        actor_user_id=user.id,
+        after={"command": command.kind.value, "command_id": command.public_id},
+    )
+
+    return _as_command(command)
+
+
+@router.get(
+    "/{kiosk_id}/device/commands", response_model=list[DeviceCommandResponse]
+)
+def machine_commands(
+    kiosk_id: str,
+    scope: KioskScope,
+    db: Annotated[Session, Depends(get_db)],
+    limit: int = 20,
+) -> list[DeviceCommandResponse]:
+    """What has been asked of this machine lately, and how it went.
+
+    Without this, a restart is a button that gives no answer -- and a button
+    that gives no answer is one somebody presses four times.
+    """
+    kiosk = kiosk_repo.get_kiosk(db, scope, kiosk_id)
+    return [_as_command(c) for c in recent_commands(db, kiosk, limit=limit)]

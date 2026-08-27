@@ -403,3 +403,177 @@ def test_the_filename_cannot_be_bent_by_a_kiosks_name(client, db_session, alice)
     assert kiosk.public_id in disposition
     assert "\n" not in disposition and "\r" not in disposition
     assert "X-Injected" not in disposition
+
+
+# ── admin is a wider scope here too ─────────────────────────────────────────
+#
+# The authz matrix declares every route in this router as {OWNER, ADMIN}, and
+# the router's own guard says the same. Each route then narrowed it again to
+# OWNER, so an admin was refused from a surface the matrix promised them --
+# and `test_matrix_enforced` could not see it, because that test fires the
+# audiences the matrix does *not* name and requires a refusal. Nothing was
+# checking that a named audience gets through.
+
+
+@pytest.fixture
+def an_admin(db_session) -> User:
+    return _user(db_session, "admin@example.com", Role.ADMIN)
+
+
+def test_admin_sees_earnings_across_the_whole_estate(
+    client, db_session, an_admin, alice, bob, student
+):
+    a_paid_order(db_session, student, _kiosk(db_session, alice, "Alice's"))
+    a_paid_order(db_session, student, _kiosk(db_session, bob, "Bob's"))
+
+    response = client.get("/v1/owner/earnings", headers=_auth(an_admin))
+
+    assert response.status_code == 200
+    assert response.json()["order_count"] == 2
+
+
+def test_admin_sees_earnings_by_kiosk(client, db_session, an_admin, alice, bob, student):
+    a_paid_order(db_session, student, _kiosk(db_session, alice, "Alice's"))
+    a_paid_order(db_session, student, _kiosk(db_session, bob, "Bob's"))
+
+    response = client.get("/v1/owner/earnings/by-kiosk", headers=_auth(an_admin))
+
+    assert response.status_code == 200
+    assert {row["kiosk_name"] for row in response.json()} == {"Alice's", "Bob's"}
+
+
+def test_admin_reads_any_kiosks_orders(client, db_session, an_admin, alice, student):
+    kiosk = _kiosk(db_session, alice, "Alice's")
+    a_paid_order(db_session, student, kiosk)
+
+    response = client.get(
+        f"/v1/owner/kiosks/{kiosk.public_id}/orders", headers=_auth(an_admin)
+    )
+
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+
+
+def test_admin_exports_any_kiosks_orders(client, db_session, an_admin, alice, student):
+    kiosk = _kiosk(db_session, alice, "Alice's")
+    a_paid_order(db_session, student, kiosk)
+
+    response = client.get(
+        f"/v1/owner/kiosks/{kiosk.public_id}/orders/export", headers=_auth(an_admin)
+    )
+
+    assert response.status_code == 200
+    assert "order_id" in response.text
+
+
+# ── the day series ──────────────────────────────────────────────────────────
+#
+# A real endpoint rather than a chart each console adds up for itself. The admin
+# console built one client-side out of the order export -- which caps, buckets
+# in UTC and knows nothing of refunds -- and the owner app was about to build a
+# second. Two implementations of "what did this shop take on Tuesday" is the
+# shape of every defect in the legacy audit.
+
+
+def test_the_days_sum_to_the_figure_printed_above_them(
+    client, db_session, alice, student
+):
+    kiosk = _kiosk(db_session, alice, "Alice Print")
+    a_paid_order(db_session, student, kiosk, pages=10)
+    a_paid_order(db_session, student, kiosk, pages=20)
+
+    series = client.get("/v1/owner/earnings/daily", headers=_auth(alice)).json()
+    total = client.get("/v1/owner/earnings", headers=_auth(alice)).json()
+
+    assert sum(Decimal(row["earnings"]["gross_inr"]) for row in series) == Decimal(
+        total["gross_inr"]
+    )
+    assert sum(row["earnings"]["order_count"] for row in series) == total["order_count"]
+
+
+def test_a_day_row_carries_the_same_four_numbers_as_the_total(
+    client, db_session, alice, student
+):
+    kiosk = _kiosk(db_session, alice, "Alice Print")
+    a_paid_order(db_session, student, kiosk, pages=10)
+
+    row = client.get("/v1/owner/earnings/daily", headers=_auth(alice)).json()[0]
+
+    assert set(row) == {"day", "earnings"}
+    assert set(row["earnings"]) == {
+        "gross_inr",
+        "refunded_inr",
+        "net_inr",
+        "order_count",
+    }
+
+
+def test_the_series_covers_only_this_owners_kiosks(
+    client, db_session, alice, bob, student
+):
+    a_paid_order(db_session, student, _kiosk(db_session, bob, "Bob Print"), pages=50)
+    _kiosk(db_session, alice, "Alice Print")
+
+    series = client.get("/v1/owner/earnings/daily", headers=_auth(alice)).json()
+
+    assert series == []
+
+
+def test_one_shop_can_be_asked_about_on_its_own(client, db_session, alice, student):
+    quiet = _kiosk(db_session, alice, "Quiet Print")
+    busy = _kiosk(db_session, alice, "Busy Print")
+    a_paid_order(db_session, student, busy, pages=10)
+
+    assert client.get(
+        f"/v1/owner/earnings/daily?kiosk_id={quiet.public_id}", headers=_auth(alice)
+    ).json() == []
+    assert (
+        client.get(
+            f"/v1/owner/earnings/daily?kiosk_id={busy.public_id}", headers=_auth(alice)
+        ).json()[0]["earnings"]["gross_inr"]
+        == "20.00"
+    )
+
+
+def test_another_owners_kiosk_is_not_found_rather_than_forbidden(
+    client, db_session, alice, bob
+):
+    """A 403 would confirm the kiosk exists, which tells one shop owner
+    something true about a competitor.
+
+    Alice's own kiosk is asked for first, because a 404 is also what a route
+    that does not exist answers -- and a test that cannot tell those apart
+    passes before the feature is written."""
+    mine = _kiosk(db_session, alice, "Alice Print")
+    theirs = _kiosk(db_session, bob, "Bob Print")
+
+    assert (
+        client.get(
+            f"/v1/owner/earnings/daily?kiosk_id={mine.public_id}", headers=_auth(alice)
+        ).status_code
+        == 200
+    )
+    response = client.get(
+        f"/v1/owner/earnings/daily?kiosk_id={theirs.public_id}", headers=_auth(alice)
+    )
+
+    assert response.status_code == 404
+
+
+def test_a_student_cannot_read_a_shops_day_series(client, db_session, alice, student):
+    _kiosk(db_session, alice, "Alice Print")
+
+    response = client.get("/v1/owner/earnings/daily", headers=_auth(student))
+
+    assert response.status_code == 403
+
+
+def test_admin_sees_the_whole_estate_day_by_day(
+    client, db_session, an_admin, alice, bob, student
+):
+    a_paid_order(db_session, student, _kiosk(db_session, alice, "Alice Print"), pages=10)
+    a_paid_order(db_session, student, _kiosk(db_session, bob, "Bob Print"), pages=20)
+
+    series = client.get("/v1/owner/earnings/daily", headers=_auth(an_admin)).json()
+
+    assert sum(row["earnings"]["order_count"] for row in series) == 2

@@ -1,4 +1,4 @@
-"""Giving money back.
+"""Giving money back, from the admin surface.
 
 `payments.refunds` has been built, and mutation-tested, since the payments
 module landed -- and nothing exposed it. The first student charged for a print
@@ -12,11 +12,10 @@ order names its payment, and from there every decision is read off the *payment*
 payment gate's answer recorded at checkout, and a kiosk's owner or keys may have
 changed since.
 
-The destination is derived, not chosen. A wallet payment has no gateway payment
-to reverse, so balance is the only place it can go. A gateway payment goes back
-the way it came unless somebody asks for balance, which is legal only where the
-platform collected. The refund service enforces all of that; this route does not
-restate it.
+This route is one of **two doors onto `app.refunding`**; the other is the
+owner's, at their own shop. The difference between them is which orders are
+reachable and nothing else. The old backend wrote the refund twice instead, and
+the two copies disagreed about whose Razorpay account collects.
 """
 
 from typing import Annotated
@@ -39,25 +38,15 @@ from app.core.errors import NotFound
 from app.core.ids import IdPrefix, InvalidId, parse_id
 from app.modules.identity import User
 from app.modules.identity.roles import Role
-from app.modules.ops import audit
 from app.modules.orders import Order, order_by_public_id
-from app.modules.payments import (
-    Payment,
-    PaymentSource,
-    RazorpayGateway,
-    RefundDestination,
-    RefundSink,
-    credentials_for_payment,
-    payment_for_order,
-    refund,
-)
+from app.modules.payments import RazorpayGateway, RefundSink
+from app.refunding import refund_an_order
 
 router = APIRouter(prefix="/v1/admin/orders", tags=["admin"])
 
 CurrentAdmin = Annotated[User, Depends(require_role(Role.ADMIN))]
 
 NO_SUCH_ORDER = "That order does not exist."
-NOTHING_PAID = "Nothing has been paid for that order, so there is nothing to give back."
 
 
 def _order(db: Session, order_id: str) -> Order:
@@ -72,26 +61,12 @@ def _order(db: Session, order_id: str) -> Order:
     return order
 
 
-def _destination(payment: Payment, asked: str | None) -> RefundDestination:
-    """Where the money goes, derived from how it arrived.
-
-    A wallet payment never touched a gateway, so there is nothing to reverse and
-    balance is the only legal answer -- asking for source would be refused by
-    the refund service anyway, and refusing here would only duplicate the rule.
-    """
-    if asked is not None:
-        return RefundDestination(asked)
-    if payment.source is PaymentSource.WALLET:
-        return RefundDestination.WALLET
-    return RefundDestination.SOURCE
-
-
 @router.post(
     "/{order_id}/refund",
     response_model=RefundResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def refund_an_order(
+def refund_any_order(
     order_id: str,
     body: RefundRequest,
     admin: CurrentAdmin,
@@ -110,69 +85,22 @@ def refund_an_order(
 
     Defaults to everything still owed, which is the case by a wide margin -- the
     print did not come out, so all of it goes back.
+
+    Every order in the estate is reachable here; that is the whole difference
+    from the owner's door. The money itself moves through the same use case.
     """
-    order = _order(db, order_id)
-
-    payment = payment_for_order(db, order.id)
-    if payment is None:
-        raise NotFound(NOTHING_PAID)
-
-    amount = body.amount_inr
-    if amount is None:
-        amount = payment.amount_inr - payment.refunded_inr
-
-    destination = _destination(payment, body.destination)
-
-    # Only a to-source refund needs an account to act on. Asking for the
-    # credentials of a wallet payment is refused outright -- rightly, since it
-    # never went through a gateway -- so a balance refund must not ask.
-    credentials = None
-    if destination is RefundDestination.SOURCE:
-        # The collecting account's keys, read off the payment. An account can
-        # only refund a payment it took, so these are never the gateway
-        # object's own.
-        credentials = credentials_for_payment(
-            db,
-            payment,
-            box=box,
-            platform_key_id=settings.RAZORPAY_KEY_ID,
-            platform_key_secret=settings.RAZORPAY_KEY_SECRET,
-        )
-
-    issued = refund(
+    issued = refund_an_order(
         db,
-        payment=payment,
-        amount=amount,
-        destination=destination,
-        idempotency_key=body.idempotency_key,
+        order=_order(db, order_id),
         actor_user_id=admin.id,
+        idempotency_key=body.idempotency_key,
+        amount_inr=body.amount_inr,
+        destination=body.destination,
         reason=body.reason,
         razorpay=razorpay,
-        credentials=credentials,
+        box=box,
         sink=sink,
+        platform_key_id=settings.RAZORPAY_KEY_ID,
+        platform_key_secret=settings.RAZORPAY_KEY_SECRET,
     )
-
-    audit.record(
-        db,
-        action="payment.refunded",
-        entity_type="payment",
-        entity_id=payment.public_id,
-        actor_user_id=admin.id,
-        after={
-            "refund_id": issued.public_id,
-            "amount_inr": str(issued.amount_inr),
-            "destination": RefundDestination(destination).value,
-            "order_id": order.public_id,
-        },
-        note=body.reason,
-    )
-
-    return RefundResponse(
-        id=issued.public_id,
-        payment_id=payment.public_id,
-        order_id=order.public_id,
-        amount_inr=issued.amount_inr,
-        destination=RefundDestination(destination).value,
-        refunded_total_inr=payment.refunded_inr,
-        created_at=issued.created_at,
-    )
+    return RefundResponse(**vars(issued))
