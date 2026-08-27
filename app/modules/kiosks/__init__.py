@@ -6,6 +6,15 @@ the contract because callers must annotate what the services return; the
 layer breaks the import contracts.
 """
 
+from app.modules.kiosks.commands import (
+    COMMAND_LIFETIME,
+    claim_commands,
+    recent_commands,
+    report_command,
+    report_recovered,
+    report_stuck,
+    request_command,
+)
 from app.modules.kiosks.devices import (
     ENROLMENT_LIFETIME,
     HEARTBEAT_WINDOW,
@@ -22,6 +31,8 @@ from app.modules.kiosks.devices import (
 )
 from app.modules.kiosks.enums import (
     AssignmentRole,
+    DeviceCommandKind,
+    DeviceCommandState,
     DeviceStatus,
     KioskType,
     OnboardingStage,
@@ -31,7 +42,13 @@ from app.modules.kiosks.favourites import (
     favourite_kiosk_ids,
     unfavourite_kiosk,
 )
-from app.modules.kiosks.models import Kiosk, KioskDevice, KioskFavourite, KioskPaper
+from app.modules.kiosks.models import (
+    Kiosk,
+    KioskDevice,
+    KioskDeviceCommand,
+    KioskFavourite,
+    KioskPaper,
+)
 from app.modules.kiosks.onboarding import (
     BillingCheck,
     PlatformOnlyBilling,
@@ -75,6 +92,16 @@ from app.modules.kiosks.staffing import (
 )
 
 __all__ = [
+    "COMMAND_LIFETIME",
+    "DeviceCommandKind",
+    "DeviceCommandState",
+    "KioskDeviceCommand",
+    "claim_commands",
+    "recent_commands",
+    "report_command",
+    "report_recovered",
+    "report_stuck",
+    "request_command",
     "ENROLMENT_LIFETIME",
     "HEARTBEAT_WINDOW",
     "AssignmentRole",

@@ -29,6 +29,7 @@ class IdPrefix(StrEnum):
     SUBSCRIPTION = "sub"
     ALERT = "alr"
     PAYMENT_CONFIG_CHANGE = "pcr"
+    DEVICE_COMMAND = "cmd"
 
 
 class InvalidId(ValueError):

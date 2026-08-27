@@ -85,3 +85,41 @@ TRANSITIONS: dict[OnboardingStage, set[OnboardingStage]] = {
 
 def can_transition(current: OnboardingStage, target: OnboardingStage) -> bool:
     return target in TRANSITIONS[current]
+
+
+class DeviceCommandKind(StrEnum):
+    """Something an operator asks the machine in a shop to do.
+
+    Named for the effect rather than for the daemon on one operating system.
+    `RESTART_PRINTING` is CUPS on a Pi and the Print Spooler on Windows -- one
+    request, and the machine knows which of those it has. A kind called
+    `restart_cups` would be a lie on half the estate, which is the shape of
+    `price_cents` holding rupees.
+
+    There is deliberately nothing here for Ghostscript. It is not a service: a
+    copy of it is started for one file and exits, so there is nothing running
+    to restart, and offering the button would be offering a placebo.
+    """
+
+    RESTART_AGENT = "restart_agent"
+    RESTART_PRINTING = "restart_printing"
+
+
+class DeviceCommandState(StrEnum):
+    """Where a command has got to.
+
+    QUEUED and SENT are separate because they answer different questions. A
+    command still QUEUED after a while means the machine is not asking -- it is
+    offline. One stuck at SENT means it took the instruction and never said how
+    it went, which is the machine having been restarted mid-command and is the
+    ordinary way `RESTART_AGENT` ends.
+    """
+
+    QUEUED = "queued"
+    SENT = "sent"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    # Never picked up in time. A restart asked for an hour ago, run when the
+    # machine finally reconnects, restarts something nobody is watching -- and
+    # the reason it was asked for has usually resolved itself by then.
+    EXPIRED = "expired"

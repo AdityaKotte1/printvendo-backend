@@ -28,6 +28,8 @@ from app.core.db import Base, EnumText
 from app.core.ids import IdPrefix, new_id
 from app.modules.kiosks.enums import (
     AssignmentRole,
+    DeviceCommandKind,
+    DeviceCommandState,
     DeviceStatus,
     KioskType,
     OnboardingStage,
@@ -135,6 +137,17 @@ class KioskDevice(Base):
     agent_update_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # When this machine last told us it could not get a job out of the printer.
+    #
+    # It is on the device rather than a flag on the kiosk because it also says
+    # *we* are the reason the shop is closed. An owner who puts their own shop
+    # into maintenance to change a toner cartridge must not have it reopened by
+    # a printer clearing its queue; this column is what tells those two cases
+    # apart, and clearing it is what lets the shop reopen by itself.
+    stuck_since: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 
@@ -335,6 +348,61 @@ class StaffInvite(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class KioskDeviceCommand(Base):
+    """Something an operator has asked the machine at a kiosk to do.
+
+    A row rather than a message pushed down the socket, for the same reason a
+    print task is a row: the socket carries a wake and never work. A command
+    sent over a connection that drops mid-flight is a restart nobody can tell
+    happened, and a reconnect overlapping a publish would run it twice.
+
+    It is deliberately not a print task. A print task is owed to a student who
+    has paid, is claimed under a lease and is retried; a command is an
+    operator's request that goes stale, and running a stale one restarts a shop
+    that has been working again for an hour.
+    """
+
+    __tablename__ = "kiosk_device_commands"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    public_id: Mapped[str] = mapped_column(
+        String(24),
+        unique=True,
+        index=True,
+        default=lambda: new_id(IdPrefix.DEVICE_COMMAND),
+    )
+
+    kiosk_id: Mapped[int] = mapped_column(
+        ForeignKey("kiosks.id", ondelete="CASCADE"), index=True
+    )
+    # Who asked. Nullable because the row outlives the account: an admin who
+    # has left should not take the record of what they restarted with them.
+    requested_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    kind: Mapped[DeviceCommandKind] = mapped_column(EnumText(DeviceCommandKind, 32))
+    state: Mapped[DeviceCommandState] = mapped_column(
+        EnumText(DeviceCommandState, 16),
+        default=DeviceCommandState.QUEUED,
+        server_default=DeviceCommandState.QUEUED.value,
+        index=True,
+    )
+
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
