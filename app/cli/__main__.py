@@ -253,10 +253,6 @@ def _report(world, settings) -> None:
     print("\nthe student has money in their wallet, so printing needs no card.\n")
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
-
-
 def _report_wallets(report, *, applied: bool) -> None:
     """The figures somebody checks the run against, and the names they chase.
 
@@ -297,3 +293,7 @@ def _report_wallets(report, *, applied: bool) -> None:
             print(f"    ... and {len(report.refused) - 20} more")
         print()
         print("  Deal with these before anybody is told the cutover is done.")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

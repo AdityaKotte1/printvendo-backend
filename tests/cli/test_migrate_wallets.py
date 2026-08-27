@@ -165,3 +165,82 @@ def test_a_dry_run_against_the_old_database_writes_nothing(legacy_db, db_session
 
     assert report.money_expected == Decimal("40.00")
     assert identity_repo.get_by_email(db_session, "a@x.edu") is None
+
+
+# ── the command itself ──────────────────────────────────────────────────────
+
+
+def test_the_command_runs_end_to_end(legacy_db, postgres_url, monkeypatch, capsys):
+    """`main()` invoked the way a person invokes it.
+
+    The tests above exercise the reader and the use case, and both passed while
+    `python -m app.cli migrate-wallets` crashed with `NameError` -- the report
+    function was defined *below* the `if __name__` guard, so it did not exist by
+    the time `main()` reached it. Nothing that tested a function rather than the
+    entry point could have caught that.
+    """
+    from app.cli.__main__ import main
+    from app.core.config import get_settings
+
+    _add(legacy_db, "cli@x.edu", "40.00")
+
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    get_settings.cache_clear()
+
+    code = main(
+        [
+            "migrate-wallets",
+            "--legacy-url",
+            f"{postgres_url}?options=-csearch_path%3Dlegacy",
+        ]
+    )
+    get_settings.cache_clear()
+
+    printed = capsys.readouterr().out
+    assert code == 0
+    assert "DRY RUN" in printed
+    assert "40.00" in printed
+
+
+def test_a_negative_legacy_balance_never_reaches_the_wallet(
+    legacy_db, postgres_url, monkeypatch, capsys
+):
+    """It is filtered out by the reader's `where balance > 0`, not refused by
+    the wallet -- so it is carried nowhere and costs nobody anything.
+
+    Worth pinning as the behaviour it is: the *reporting* of such an account is
+    a gap, not a feature. Nothing tells an operator that a student with a
+    negative legacy balance was passed over. There are none in the real dump,
+    which is why this is recorded rather than fixed.
+    """
+    from app.cli.__main__ import main
+    from app.core.config import get_settings
+
+    _add(legacy_db, "fine@x.edu", "40.00")
+    with legacy_db.begin() as connection:
+        user_id = connection.execute(
+            text("insert into legacy.users (email) values ('bad@x.edu') returning id")
+        ).scalar_one()
+        connection.execute(
+            text("insert into legacy.wallets (user_id, balance) values (:u, -5.00)"),
+            {"u": user_id},
+        )
+
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    get_settings.cache_clear()
+
+    code = main(
+        [
+            "migrate-wallets",
+            "--legacy-url",
+            f"{postgres_url}?options=-csearch_path%3Dlegacy",
+            "--apply",
+        ]
+    )
+    get_settings.cache_clear()
+
+    printed = capsys.readouterr().out
+    # The good account went through; the negative one was never seen.
+    assert code == 0
+    assert "40.00" in printed
+    assert "bad@x.edu" not in printed

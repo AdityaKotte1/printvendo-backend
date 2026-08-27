@@ -13,3 +13,11 @@ storage/
 # Session transcripts pasted in for context, not source.
 2026-*-*-*-*.txt
 .playwright-mcp/
+
+# Legacy production dumps. Real student names, addresses and password hashes --
+# they are read at cutover and kept off the repository for good.
+legacy-db.dump
+legacy-db.sql.gz
+legacy-*.dump
+legacy-*.sql.gz
+legacy-save/
