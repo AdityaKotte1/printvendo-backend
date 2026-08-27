@@ -1,5 +1,12 @@
 {
 	email admin@printvendo.com
+
+	# Let's Encrypt only. Caddy's default is to fall back to ZeroSSL when LE
+	# fails, and ZeroSSL's ACME endpoint is unreachable from this VPS -- every
+	# retry then spent ~150s timing out before coming back round to the issuer
+	# that can actually work. Pinning it also stops Caddy dropping to LE's
+	# staging CA after repeated failures, which issues an untrusted certificate.
+	acme_ca https://acme-v02.api.letsencrypt.org/directory
 }
 
 # One site. The three consoles are static builds hosted elsewhere and reach
