@@ -9,10 +9,20 @@ endpoints were built for it, two of them not on the original list. An owner may
 now refund **only money their own Razorpay collected**, and a paid subscription
 has a printable invoice.
 
-**Nothing below is committed.** Four working trees are dirty —
-`printvendo-backend`, `printvendo-agent`, `printvendo-owner`, and
-`printvendo-admin`, which is still not a git repo. `git status` in each is the
-first thing to look at. Everything passes; it simply has not been committed.
+**Everything is committed**, each repo on its own branch, nothing pushed:
+
+| Repo | Branch |
+|---|---|
+| `printvendo-backend` | `feat/owner-surface-and-billing` |
+| `printvendo-owner` | `feat/rewire-onto-printvendo-backend` |
+| `printvendo-agent` | `fix/windows-finished-job-state` |
+| `printvendo-web` | `fix/default-api-base-url` |
+| `printvendo-admin` | `master` — it is a git repo now, with its first commit |
+
+The backend's history is split by subject rather than by session, so the
+previous session's uncommitted device-command work is in there too; the agent's
+single commit says out loud that it carries both, because `runner.py` and
+`printing.py` could not be split cleanly.
 
 Update this file at the end of a session. Delete anything that has become true
 in CLAUDE.md — two documents describing the same thing is how they drift.

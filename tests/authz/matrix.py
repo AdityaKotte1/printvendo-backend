@@ -209,6 +209,12 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     # separate surface and a separate decision, and a student must never be
     # able to refund the order they placed.
     ("POST", "/v1/admin/orders/{order_id}/refund"): {ADMIN},
+    # One order, whole -- who paid, how the money moved, and what has already
+    # been given back. **ADMIN alone, and here the audience is the control
+    # rather than the scope.** The owner surface is built to be incapable of
+    # carrying student identity, so an owner reading this at a shop they hold
+    # would get exactly what `OwnerOrderResponse` exists to withhold.
+    ("GET", "/v1/admin/orders/{order_id}"): {ADMIN},
     ("GET", "/v1/admin/kiosks/{kiosk_id}"): {ADMIN},
     ("POST", "/v1/admin/kiosks/{kiosk_id}/stage"): {ADMIN},
     ("PUT", "/v1/admin/kiosks/{kiosk_id}/type"): {ADMIN},

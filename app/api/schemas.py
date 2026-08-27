@@ -677,6 +677,80 @@ class RefundRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=300)
 
 
+class OrderStudentResponse(BaseModel):
+    """Who placed an order.
+
+    Admin only, and it exists as its own type on its own response for exactly
+    that reason. `OwnerOrderResponse` has no field for a person and must never
+    grow one -- that absence is what makes the owner routes incapable of leaking
+    identity however they are later edited. A wider audience gets a wider type,
+    not a widened one.
+    """
+
+    id: str
+    email: str
+    full_name: str | None
+
+
+class OrderPaymentResponse(BaseModel):
+    """How the money moved, read off the Payment row.
+
+    `collected_by` is `collecting_user_id` -- the payment gate's answer recorded
+    at checkout, never re-derived from the kiosk, whose owner or keys may have
+    changed since. It is also the whole of why a refund may or may not go to a
+    balance, so an operator looking at a refund that was refused needs to see
+    it.
+    """
+
+    id: str
+    source: str
+    status: str
+    amount_inr: Decimal
+    refunded_inr: Decimal
+    razorpay_order_id: str | None
+    razorpay_payment_id: str | None
+    collected_by: str | None
+    created_at: datetime
+    captured_at: datetime | None
+
+
+class OrderRefundResponse(BaseModel):
+    id: str
+    amount_inr: Decimal
+    destination: str
+    reason: str | None
+    created_at: datetime
+
+
+class AdminOrderResponse(BaseModel):
+    """One order, whole, for the person who has to answer for it.
+
+    Everything the owner view has, plus the three things it deliberately does
+    not: who paid, how the money actually moved, and what has already been
+    given back. An operator handling "I was charged twice and nothing came out"
+    cannot answer it from the owner surface, and should not have to guess.
+    """
+
+    id: str
+    kiosk_id: str
+    kiosk_name: str
+    state: str
+    payment_method: str | None
+    subtotal_inr: Decimal
+    fee_inr: Decimal
+    total_inr: Decimal
+    created_at: datetime
+    paid_at: datetime | None
+    refunded_at: datetime | None
+    expires_at: datetime | None
+    student: OrderStudentResponse
+    items: list[OrderItemResponse]
+    # Absent rather than empty for an order nobody paid for: there is no payment
+    # to describe, and an empty object would invite reading zeroes off it.
+    payment: OrderPaymentResponse | None
+    refunds: list[OrderRefundResponse]
+
+
 class OwnerRefundRequest(BaseModel):
     """What a shop gives back.
 

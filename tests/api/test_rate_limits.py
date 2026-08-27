@@ -5,6 +5,8 @@ second hand-kept list, so a new PUBLIC route fails the build until somebody
 decides whether it may be hammered.
 """
 
+from datetime import timedelta
+
 import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
@@ -12,6 +14,7 @@ from fastapi.testclient import TestClient
 from app.api.deps import get_db, get_notifier, get_secret
 from app.api.ratelimit import LIMITS, UNLIMITED, client_key
 from app.core.config import Settings
+from app.core.security import TokenType, create_token
 from app.main import create_app
 from tests.authz.matrix import MATRIX, PUBLIC, WEBSOCKET
 from tests.authz.test_matrix_complete import declared_routes
@@ -234,3 +237,109 @@ def test_limiting_can_be_turned_off_entirely(make_client):
     client = make_client(TRUST_PROXY_HEADERS=True, RATE_LIMIT_ENABLED=False)
     for _ in range(FORGOT_PER_MINUTE * 2):
         assert _forgot(client).status_code == 202
+
+
+# ── the bucket a person gets, rather than the one a building shares ─────────
+#
+# Every limit above is per address, and a campus is one address: two hundred
+# students behind one NAT share a bucket, so a single script degrades the
+# lecture hall around it and the ceilings have to be set loose enough that the
+# hall still works. That is the trade this section removes.
+#
+# A request carrying a *verified* token is keyed on the account instead. It has
+# to be verified: keying on an unchecked `sub` would let anybody mint a fresh
+# bucket per request by editing a claim, which is worse than no per-account
+# limit at all. An unverifiable token falls back to the address, which is also
+# what the request itself is about to be refused for.
+
+
+def _token(subject: str = "usr_aaaaaaaaaaaaaaaa") -> str:
+    return create_token(subject, TokenType.ACCESS, SECRET, timedelta(minutes=5))
+
+
+def _bearer(subject: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {_token(subject)}"}
+
+
+def test_two_accounts_behind_one_address_do_not_share_a_bucket(client):
+    """The whole point. One student's script must not spend the budget of
+    everybody else on the campus wifi."""
+    route = "/v1/app/auth/change-password"
+    body = {"current_password": "x" * 12, "new_password": "y" * 12}
+    mine_headers = _bearer("usr_aaaaaaaaaaaaaaaa")
+
+    assert ("POST", route) in LIMITS
+
+    for _ in range(25):
+        client.post(route, json=body, headers=mine_headers)
+
+    # The first account is spent. The second, from the same address, is not.
+    mine = client.post(route, json=body, headers=mine_headers)
+    theirs = client.post(route, json=body, headers=_bearer("usr_bbbbbbbbbbbbbbbb"))
+
+    assert mine.status_code == 429
+    assert theirs.status_code != 429
+
+
+def test_a_wrongly_signed_subject_cannot_mint_a_fresh_bucket(client):
+    """The check that makes the account bucket a limit rather than a courtesy.
+
+    These tokens are **well formed** and carry a different `sub` each time --
+    what they do not carry is our signature. A limiter that decoded the claim
+    without verifying it would hand out a fresh bucket per request for the price
+    of editing a field, which is worse than having no per-account limit at all.
+
+    Garbage like `Bearer not.a.token` does not test this: an unverified decoder
+    rejects that too, so the assertion would pass either way. It has to be a
+    token that a decoder *would* believe.
+    """
+    body = {"current_password": "x" * 12, "new_password": "y" * 12}
+
+    seen = set()
+    for n in range(80):
+        forged = create_token(
+            f"usr_{n:016d}", TokenType.ACCESS, "n" * 32, timedelta(minutes=5)
+        )
+        seen.add(
+            client.post(
+                "/v1/app/auth/change-password",
+                json=body,
+                headers={"Authorization": f"Bearer {forged}"},
+            ).status_code
+        )
+        if 429 in seen:
+            break
+
+    assert 429 in seen, "a forged subject was handed its own bucket every time"
+
+
+def test_an_anonymous_caller_is_still_limited_by_address(client):
+    """Nothing about adding an account bucket may loosen the one that catches a
+    caller with no credential at all."""
+    seen = set()
+    for _ in range(40):
+        seen.add(client.post("/v1/app/auth/login", json={}).status_code)
+
+    assert 429 in seen
+
+
+def test_one_address_cannot_mint_accounts_without_bound(client):
+    """The backstop. Per-account buckets alone would mean one machine could do
+    as much as it liked by rotating a claim, so the address ceiling stays --
+    just far enough above a single account's to leave a busy campus alone.
+    """
+    body = {"current_password": "x" * 12, "new_password": "y" * 12}
+
+    seen = set()
+    for n in range(600):
+        seen.add(
+            client.post(
+                "/v1/app/auth/change-password",
+                json=body,
+                headers=_bearer(f"usr_{n:016d}"),
+            ).status_code
+        )
+        if 429 in seen:
+            break
+
+    assert 429 in seen, "an address rotating accounts was never refused"

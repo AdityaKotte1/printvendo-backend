@@ -155,6 +155,7 @@ source_modules =
     app.cli
     app.provisioning
     app.refunding
+    app.migration
 forbidden_modules =
     app.modules.identity.models
     app.modules.kiosks.models
@@ -175,6 +176,6 @@ type = layers
 # same service the job calls.
 layers =
     app.jobs | app.api | app.cli
-    app.provisioning | app.refunding
+    app.provisioning | app.refunding | app.migration
     app.modules
     app.core

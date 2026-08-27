@@ -31,15 +31,29 @@ from app.api.deps import (
     get_settings_from_app,
     require_role,
 )
-from app.api.schemas import RefundRequest, RefundResponse
+from app.api.schemas import (
+    AdminOrderResponse,
+    OrderItemResponse,
+    OrderPaymentResponse,
+    OrderRefundResponse,
+    OrderStudentResponse,
+    RefundRequest,
+    RefundResponse,
+)
 from app.core.config import Settings
 from app.core.crypto import SecretBox
 from app.core.errors import NotFound
 from app.core.ids import IdPrefix, InvalidId, parse_id
 from app.modules.identity import User
+from app.modules.identity import repository as identity_repo
 from app.modules.identity.roles import Role
-from app.modules.orders import Order, order_by_public_id
-from app.modules.payments import RazorpayGateway, RefundSink
+from app.modules.orders import Order, order_by_public_id, view_of
+from app.modules.payments import (
+    RazorpayGateway,
+    RefundSink,
+    payment_for_order,
+    refunds_for,
+)
 from app.refunding import refund_an_order
 
 router = APIRouter(prefix="/v1/admin/orders", tags=["admin"])
@@ -104,3 +118,113 @@ def refund_any_order(
         platform_key_secret=settings.RAZORPAY_KEY_SECRET,
     )
     return RefundResponse(**vars(issued))
+
+
+NO_SUCH_STUDENT = "That order names an account that no longer exists."
+
+
+@router.get("/{order_id}", response_model=AdminOrderResponse)
+def read_an_order(
+    order_id: str,
+    admin: CurrentAdmin,
+    db: Annotated[Session, Depends(get_db)],
+) -> AdminOrderResponse:
+    """One order, whole.
+
+    **Admin only, and that is the control rather than scope.** Everywhere else
+    in this system an admin is a wider kiosk scope through the same route; here
+    the route itself is different, because the owner surface is built to be
+    *incapable* of carrying student identity. Giving an owner this view at a
+    shop they hold would hand them exactly what `OwnerOrderResponse` exists to
+    withhold, so the audience is what decides, not the kiosk.
+
+    Three things live here and nowhere else: who paid, how the money actually
+    moved, and what has already been given back. An operator answering "I was
+    charged twice and nothing came out" needs all three in one place, and the
+    order row alone cannot tell them whether a partial refund has been made.
+    """
+    order = _order(db, order_id)
+    view = view_of(db, order)
+
+    student = identity_repo.actors_by_id(db, {order.user_id}).get(order.user_id)
+    if student is None:
+        # A deleted account is not an error worth a 500 -- but it is not
+        # something to render as a blank student either.
+        raise NotFound(NO_SUCH_STUDENT)
+
+    payment = payment_for_order(db, order.id)
+
+    return AdminOrderResponse(
+        id=view.id,
+        kiosk_id=view.kiosk_id,
+        kiosk_name=view.kiosk_name,
+        state=view.state.value,
+        payment_method=view.payment_method,
+        subtotal_inr=view.subtotal_inr,
+        fee_inr=view.fee_inr,
+        total_inr=view.total_inr,
+        created_at=view.created_at,
+        paid_at=view.paid_at,
+        refunded_at=view.refunded_at,
+        expires_at=view.expires_at,
+        student=OrderStudentResponse(
+            id=student.public_id,
+            email=student.email,
+            full_name=student.full_name,
+        ),
+        items=[
+            OrderItemResponse(
+                document_id=item.document_id,
+                filename=item.filename,
+                kind=item.kind,
+                colour=item.colour,
+                duplex=item.duplex,
+                copies=item.copies,
+                page_range=item.page_range,
+                page_count=item.page_count,
+                sheets=item.sheets,
+                amount_inr=item.amount_inr,
+            )
+            for item in view.items
+        ],
+        payment=None
+        if payment is None
+        else OrderPaymentResponse(
+            id=payment.public_id,
+            source=payment.source.value,
+            status=payment.status.value,
+            amount_inr=payment.amount_inr,
+            refunded_inr=payment.refunded_inr,
+            razorpay_order_id=payment.razorpay_order_id,
+            razorpay_payment_id=payment.razorpay_payment_id,
+            collected_by=(
+                None
+                if payment.collecting_user_id is None
+                else _public_id_of(db, payment.collecting_user_id)
+            ),
+            created_at=payment.created_at,
+            captured_at=payment.captured_at,
+        ),
+        refunds=[]
+        if payment is None
+        else [
+            OrderRefundResponse(
+                id=issued.public_id,
+                amount_inr=issued.amount_inr,
+                destination=issued.destination.value,
+                reason=issued.reason,
+                created_at=issued.created_at,
+            )
+            for issued in refunds_for(db, payment)
+        ],
+    )
+
+
+def _public_id_of(db: Session, user_id: int) -> str | None:
+    """The opaque id of whoever collected, never the numeric one.
+
+    Numeric primary keys do not leave the database, so an operator reading this
+    can hand it straight to `/v1/admin/accounts/{id}` without translating.
+    """
+    actor = identity_repo.actors_by_id(db, {user_id}).get(user_id)
+    return actor.public_id if actor is not None else None

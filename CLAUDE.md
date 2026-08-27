@@ -200,7 +200,7 @@ Copy `.env.example` to `.env` and fill it. The app refuses to boot with a
   single-sided.** `lib/price.ts` mirrors `quote_line` exactly, verified across
   96 combinations, because a pay screen whose number changes at checkout is
   worse than no estimate.
-- **The authz matrix is exercised, not merely declared.**
+- **The authz matrix is exercised in both directions.**
   `tests/authz/test_matrix_enforced.py` fires every audience the matrix does
   *not* name at every route and requires a refusal — 401, 403 or 404. A **422
   fails**, because it means the caller reached body validation and only the
@@ -208,6 +208,17 @@ Copy `.env.example` to `.env` and fill it. The app refuses to boot with a
   alone, where a signed-in student reached the handler and got an empty list:
   nothing leaked, and the matrix's claim was false. Role guards live on the
   *router*, so a route added tomorrow inherits one.
+
+  It now also fires every audience the matrix **does** name and requires that
+  they are *not* turned away: 404 and 422 are fine — the caller reached the
+  handler — while 401 and 403 mean the matrix is lying. That half was missing,
+  and its absence is how `/v1/owner/earnings*` came to 403 an admin the matrix
+  promised, across four routes, with a green build throughout. Verified by
+  reintroducing exactly that narrowing and watching the test name the route and
+  the audience. A PUBLIC route is held only to *not 403*: several carry a
+  credential of their own — a webhook signature, a refresh cookie — and are
+  right to answer 401 without it, so demanding a success there would be
+  demanding the wrong thing.
 - **A refused delete must not destroy the file first.**
   `delete_document` removed the bytes and then let the database refuse the row,
   answering 204 while deleting nothing — the student was told their file was
@@ -239,9 +250,18 @@ Copy `.env.example` to `.env` and fill it. The app refuses to boot with a
   a route that was considered and left open. Coverage is derived from
   `tests/authz/matrix.py`: every route callable without a credential must
   appear in `LIMITS` or in `UNLIMITED` **with a reason**. The limits are
-  per-address and campus-NAT-aware — two hundred students share one IP — so
-  they bound a script, not a person; per-account limits need the email out of
-  the body and do not exist yet.
+  **two buckets, and which one is tight depends on what is known.** A verified
+  bearer token is counted against its *account* at the table's numbers and
+  against its address at `ADDRESS_FANOUT` times them — so one student's script
+  spends its own budget rather than the lecture hall's, while a machine
+  rotating claims still hits a wall. The token must be **verified**: keying on
+  an unchecked `sub` is keying on a field the caller controls, which is not a
+  limit. Mutation-tested with a well-formed, wrongly-signed token, because
+  garbage like `Bearer not.a.token` is rejected by an unverified decoder too
+  and would have proved nothing. Sign-in stays per-address, unavoidably and
+  correctly: there is no token yet, the account is in a body this middleware
+  deliberately does not read, and credential stuffing rotates accounts from one
+  machine anyway.
 - **The limiter fails open, the payment gate fails closed.** A Redis outage
   that refused every login would be an outage of the product to protect it from
   an abuse that may not be happening, and nothing the limiter guards is
@@ -273,6 +293,16 @@ Copy `.env.example` to `.env` and fill it. The app refuses to boot with a
   `paid_at` so it reconciles with `/v1/owner/earnings`, and it carries no
   filenames — "Medical Results Ravi Kumar.pdf" names a person as surely as an
   address does.
+- **An admin sees a whole order; an owner never can.**
+  `GET /v1/admin/orders/{id}` carries the student's account id, address and
+  name, the payment's source and Razorpay ids, whose account collected, and
+  every refund already issued. `OwnerOrderResponse` has none of that and must
+  not grow it — that absence is what makes the owner routes incapable of
+  leaking identity however they are later edited, so admin gets a **wider type
+  on its own route** rather than a widened one. The audience is the control
+  here, not the scope: an owner reading this at a shop they hold would be
+  handed exactly what their own surface exists to withhold, so the route is
+  ADMIN-only and both an owner and a student are refused.
 - **A role may be listed; STUDENT may not.** `GET /v1/admin/accounts` takes an
   exact address *or* a role, and refuses `student`. Owners, refillers and
   admins are the handful of people an operator administers, already named on
@@ -422,7 +452,7 @@ documents describing the same thing is how they drift.
 
 ## State of play
 
-**1674 tests passing, 115 routes, 12 import contracts kept, ruff clean.** Verify with:
+**1704 tests passing, 116 routes, 12 import contracts kept, ruff clean.** Verify with:
 
 ```bash
 .venv/Scripts/python -m pytest -q && .venv/Scripts/lint-imports && .venv/Scripts/python -m ruff check .

@@ -10,7 +10,7 @@ is exactly the hole the audit trail is supposed to close.
 import pytest
 
 from app.cli.bootstrap import ALREADY_HAVE_ONE, bootstrap_admin
-from app.core.errors import Conflict
+from app.core.errors import BadRequest, Conflict
 from app.modules.identity import Role
 from app.modules.identity import repository as identity_repo
 from app.modules.ops import entries_for
@@ -96,3 +96,38 @@ def test_promoting_an_existing_account_does_not_change_their_password(db_session
 def test_a_new_account_needs_a_password(db_session):
     with pytest.raises(Conflict):
         bootstrap_admin(db_session, email="nobody@example.com", password=None)
+
+
+# ── an admin who cannot sign in is not an admin ─────────────────────────────
+
+
+def test_an_address_that_cannot_sign_in_is_refused(db_session):
+    """The CLI took any string. `POST /v1/app/auth/login` validates with
+    `EmailStr`, which rejects reserved TLDs -- so `admin@printvendo.test`
+    created an account, granted it admin, and then could never be used.
+
+    On a fresh production box this is the *only* way in, so getting it wrong
+    locks you out of your own system. One such account is still sitting on the
+    dev database from before this check existed.
+    """
+    with pytest.raises(BadRequest) as raised:
+        bootstrap_admin(
+            db_session, email="admin@printvendo.test", password="Str0ngEnough!"
+        )
+
+    assert "sign in" in str(raised.value.detail)
+    assert identity_repo.get_by_email(db_session, "admin@printvendo.test") is None
+
+
+def test_something_that_is_not_an_address_at_all_is_refused(db_session):
+    with pytest.raises(BadRequest):
+        bootstrap_admin(db_session, email="not-an-email", password="Str0ngEnough!")
+
+
+def test_a_real_address_is_still_fine(db_session):
+    """The check must not be so eager that it refuses the ordinary case."""
+    user = bootstrap_admin(
+        db_session, email="ops@printvendo.com", password="Str0ngEnough!"
+    )
+
+    assert Role.ADMIN in identity_repo.roles_of(db_session, user.id)

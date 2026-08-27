@@ -16,9 +16,10 @@ from an intruder who granted themselves the role; "nobody did this" is a fact
 worth recording, and it is not the same as failing to record who.
 """
 
+from pydantic import EmailStr, TypeAdapter, ValidationError
 from sqlalchemy.orm import Session
 
-from app.core.errors import Conflict
+from app.core.errors import BadRequest, Conflict
 from app.modules.identity import Role, User, register
 from app.modules.identity import repository as identity_repo
 from app.modules.ops import audit
@@ -33,6 +34,19 @@ NEEDS_A_PASSWORD = (
     "No account exists with that address, so one has to be created and it needs "
     "a password. Pass --password, or leave it out to have one generated."
 )
+
+CANNOT_SIGN_IN = (
+    "That is not an address anybody could sign in with, so the account would be "
+    "unusable the moment it was made. Use a real email address."
+)
+
+# The *same* validator the login route uses, rather than a rule of our own.
+# `POST /v1/app/auth/login` takes an `EmailStr`, which refuses reserved TLDs
+# like `.test` -- so this command happily created `admin@printvendo.test`,
+# granted it the admin role, and produced the only account on a fresh system
+# together with no way to use it. Two different opinions about what an address
+# is would put that trap straight back.
+_ADDRESS = TypeAdapter(EmailStr)
 
 
 def bootstrap_admin(
@@ -53,6 +67,11 @@ def bootstrap_admin(
     """
     if not force and identity_repo.anyone_holds(db, Role.ADMIN):
         raise Conflict(ALREADY_HAVE_ONE)
+
+    try:
+        _ADDRESS.validate_python(email)
+    except ValidationError:
+        raise BadRequest(CANNOT_SIGN_IN) from None
 
     user = identity_repo.get_by_email(db, email)
 

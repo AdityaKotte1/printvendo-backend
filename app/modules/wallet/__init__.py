@@ -8,6 +8,7 @@ to model the gap between debiting and enqueueing a print; the `Order` aggregate
 closed that gap, so there is nothing left to hold.
 """
 
+from app.modules.wallet.imports import CarryReport, carry_balance
 from app.modules.wallet.ledger import (
     balance_of,
     credit,
@@ -18,10 +19,12 @@ from app.modules.wallet.ledger import (
 from app.modules.wallet.models import EntryKind, Wallet, WalletEntry
 
 __all__ = [
+    "CarryReport",
     "EntryKind",
     "Wallet",
     "WalletEntry",
     "balance_of",
+    "carry_balance",
     "credit",
     "debit",
     "statement",

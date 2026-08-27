@@ -205,3 +205,86 @@ def test_device_routes_refuse_a_persons_token(client, tokens, routes):
             reachable.append((method, path, status))
 
     assert reachable == []
+
+
+# ── the other direction ─────────────────────────────────────────────────────
+#
+# Everything above proves the matrix's *refusals*. Nothing proved its
+# *permissions*, and that asymmetry has already cost: `/v1/owner/earnings*`
+# allowed OWNER|ADMIN on the router and then narrowed to `require_role(OWNER)`
+# on every route, so four routes 403'd an audience the matrix promised — for
+# however long it had been there, with a green build the whole time.
+#
+# A named audience must not be turned away by *who they are*. What it may get
+# is 404 (well-formed id, nothing behind it), 422 (an empty body reached
+# validation, so authorisation let it through), 409, or a success. What it must
+# never get is 401 or 403.
+
+TURNED_AWAY = {401, 403}
+
+
+def test_every_route_admits_every_audience_it_names(client, tokens, routes):
+    """The matrix's promises, tested rather than asserted.
+
+    404 is fine and 422 is fine -- both mean the caller reached the handler and
+    was stopped by the request rather than by their identity. Only 401 and 403
+    say "not you", and for a named audience that is the matrix lying.
+    """
+    refused = []
+    for method, path, audiences in routes:
+        for audience in BEARER_AUDIENCES:
+            if audience not in audiences:
+                continue
+            status = _call(
+                client, method, path, {"Authorization": f"Bearer {tokens[audience]}"}
+            )
+            if status in TURNED_AWAY:
+                refused.append((method, path, f"as {audience}", status))
+
+    assert refused == [], (
+        "The matrix names these audiences, and the routes turned them away: "
+        f"{refused}"
+    )
+
+
+def test_no_public_route_hides_behind_a_role(client, routes):
+    """PUBLIC routes, and the narrower claim that is actually true of them.
+
+    Not "answers 200 without a credential". Several of these have a credential
+    of their own and are right to refuse without it: the Razorpay webhooks are
+    PUBLIC because Razorpay holds no token of ours and **the signature is the
+    authentication**, and `/refresh` and `/logout` authenticate with the refresh
+    cookie. An unsigned webhook answering 401 is the mechanism working.
+
+    What PUBLIC does rule out is a **role** guard. 403 means somebody was turned
+    away for who they are, and a route with no audience to check cannot have an
+    opinion about that -- so 403 here is always a declaration that has drifted.
+
+    `/health` is skipped: it is a liveness probe for a load balancer rather than
+    a route with an audience, and it answers by talking to a database this
+    module deliberately does not have.
+    """
+    misdeclared = []
+    for method, path, audiences in routes:
+        if PUBLIC not in audiences or path == "/health":
+            continue
+        if _call(client, method, path, {}) == 403:
+            misdeclared.append((method, path))
+
+    assert misdeclared == [], (
+        "These routes are declared PUBLIC and answered 403, which only a role "
+        f"guard does: {misdeclared}"
+    )
+
+
+def test_the_admitting_sweep_actually_tried_something(client, tokens, routes):
+    """The guard the negative sweep already has, for the same reason: a loop
+    whose `continue` fired every time would pass while proving nothing."""
+    tried = sum(
+        1
+        for _, _, audiences in routes
+        for audience in BEARER_AUDIENCES
+        if audience in audiences
+    )
+
+    assert tried > 150

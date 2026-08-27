@@ -7,14 +7,26 @@ reads the authz matrix to find every route reachable without a credential, and
 one that appears in neither `LIMITS` nor `UNLIMITED` fails the build. Leaving a
 route unlimited stays possible -- it just has to be said out loud, with a reason.
 
-**These are ceilings, not policy.** A campus shares one public address: two
-hundred students behind one NAT all log in from the same IP, so a limit tight
-enough to stop a targeted brute force would lock out a lecture hall. The numbers
-below are set where a script is obviously a script and a busy campus is not.
-Per-account limits -- the ones that actually stop credential stuffing on one
-person -- need the email out of the request body, which is the route's business
-rather than the edge's, and they are not built yet. Saying so here beats
-implying this covers more than it does.
+**Two buckets, and which one is tight depends on what we know.** A campus
+shares one public address: two hundred students behind one NAT arrive from the
+same IP, so a per-address limit tight enough to stop one script would lock out a
+lecture hall -- and a loose one lets that script spend everybody else's budget.
+
+So a request carrying a **verified** token is counted against its *account* at
+the numbers below, and against its address at `ADDRESS_FANOUT` times them. One
+student's script now spends its own budget; the hall is untouched; and a single
+machine still cannot do as much as it likes by rotating a claim.
+
+The token must be verified. Keying on an unchecked `sub` would hand an attacker
+an unlimited supply of buckets for the price of editing a claim, which is worse
+than having no per-account limit at all. An unverifiable token falls back to the
+address -- which is also what the request is about to be refused for anyway.
+
+What is still per-address only is **sign-in itself**, and unavoidably: there is
+no token yet, and the account is in the request body, which this middleware
+deliberately does not read. That is the right control for the shape of attack
+that matters there -- credential stuffing rotates accounts from one machine, so
+the address is the thing worth bounding.
 
 **The key is one address, and which one is a deployment fact.** Behind a reverse
 proxy every request arrives from the proxy, so without `TRUST_PROXY_HEADERS`
@@ -33,6 +45,7 @@ from starlette.responses import JSONResponse
 
 from app.core.config import Settings
 from app.core.ratelimit import Counter, counter_from_url
+from app.core.security import TokenError, TokenType, decode_token
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +55,13 @@ TOO_MANY = "Too many attempts. Please wait a moment and try again."
 UNKNOWN_CALLER = "unknown"
 
 _PERIODS = {"second": 1, "minute": 60, "hour": 3600, "day": 86_400}
+
+# How many accounts one address may be busy on before it is the address that
+# looks like the problem. Sized as a lecture hall: twenty people printing from
+# the campus wifi is a Tuesday, and one machine holding twenty accounts open is
+# not. It multiplies whatever the per-account limit is, so the two numbers can
+# never drift apart -- there is one table of ceilings, not two.
+ADDRESS_FANOUT = 20
 
 
 # Per caller. A tuple is several windows on the same route: a burst ceiling and
@@ -106,6 +126,28 @@ def client_key(
     return peer or UNKNOWN_CALLER
 
 
+def account_key(headers: Mapping[str, str], *, secret: str) -> str | None:
+    """The account this request is *provably* from, or nothing.
+
+    Verified rather than merely decoded. The signature is the whole value of
+    this: an unchecked `sub` is a field the caller controls, and a bucket keyed
+    on a field the caller controls is not a limit.
+
+    Cheap enough for the edge -- one HMAC, no database -- and a failure is not
+    worth reporting here. A request with a bad token is refused by
+    authentication a moment later; all this decides is which bucket it spent.
+    """
+    authorization = headers.get("authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+
+    try:
+        return decode_token(token.strip(), TokenType.ACCESS, secret).subject
+    except TokenError:
+        return None
+
+
 def _parse(limit: str) -> tuple[int, int]:
     """"30/minute" -> (30, 60). Raises at startup rather than at request time."""
     count, _, period = limit.partition("/")
@@ -123,10 +165,21 @@ class RateLimitMiddleware:
     routes, a database session.
     """
 
-    def __init__(self, app, *, counter: Counter, trust_proxy: bool, rules=None) -> None:
+    def __init__(
+        self,
+        app,
+        *,
+        counter: Counter,
+        trust_proxy: bool,
+        secret: str = "",
+        rules=None,
+    ) -> None:
         self.app = app
         self.counter = counter
         self.trust_proxy = trust_proxy
+        # Only to verify a bearer token's signature, so an account bucket is
+        # keyed on something the caller cannot choose.
+        self.secret = secret
         self.rules = {
             route: tuple(_parse(limit) for limit in limits)
             for route, limits in (LIMITS if rules is None else rules).items()
@@ -144,22 +197,40 @@ class RateLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
+        headers = Headers(scope=scope)
         client = scope.get("client")
-        caller = client_key(
-            headers=Headers(scope=scope),
+        address = client_key(
+            headers=headers,
             peer=client[0] if client else None,
             trust_proxy=self.trust_proxy,
         )
+        account = account_key(headers, secret=self.secret) if self.secret else None
 
+        route = f"{scope['method']} {scope['path']}"
+
+        # The buckets this request spends, tightest first. An anonymous caller
+        # has one; an authenticated one has its own plus a looser share of the
+        # address it came from. Prefixed, so an account id can never land in the
+        # same bucket as an address that happens to read like one.
         for limit, window_seconds in rules:
-            decision = await self.counter.hit(
-                f"{scope['method']} {scope['path']}|{caller}",
-                limit=limit,
-                window_seconds=window_seconds,
+            buckets = (
+                [(f"{route}|acct:{account}", limit),
+                 (f"{route}|addr:{address}", limit * ADDRESS_FANOUT)]
+                if account is not None
+                else [(f"{route}|addr:{address}", limit)]
             )
-            if not decision.allowed:
+
+            for key, ceiling in buckets:
+                decision = await self.counter.hit(
+                    key, limit=ceiling, window_seconds=window_seconds
+                )
+                if decision.allowed:
+                    continue
+
                 logger.info(
-                    "rate limited %s %s for %s", scope["method"], scope["path"], caller
+                    "rate limited %s for %s",
+                    route,
+                    account or address,
                 )
                 response = JSONResponse(
                     status_code=429,
@@ -189,4 +260,5 @@ def install_rate_limiting(app: FastAPI, settings: Settings) -> None:
         RateLimitMiddleware,
         counter=counter_from_url(settings.rate_limit_store_url),
         trust_proxy=settings.TRUST_PROXY_HEADERS,
+        secret=settings.JWT_SECRET_KEY,
     )
