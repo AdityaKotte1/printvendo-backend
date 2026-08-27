@@ -12,3 +12,4 @@ storage/
 
 # Session transcripts pasted in for context, not source.
 2026-*-*-*-*.txt
+.playwright-mcp/

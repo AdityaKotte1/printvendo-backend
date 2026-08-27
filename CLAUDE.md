@@ -273,6 +273,117 @@ Copy `.env.example` to `.env` and fill it. The app refuses to boot with a
   `paid_at` so it reconciles with `/v1/owner/earnings`, and it carries no
   filenames — "Medical Results Ravi Kumar.pdf" names a person as surely as an
   address does.
+- **A role may be listed; STUDENT may not.** `GET /v1/admin/accounts` takes an
+  exact address *or* a role, and refuses `student`. Owners, refillers and
+  admins are the handful of people an operator administers, already named on
+  kiosks the same admin can list -- making somebody remember an address per
+  shop buys nothing. Students are the directory the exactness rule exists to
+  prevent, and saying so in the refusal beats letting an operator conclude the
+  console is broken. Naming neither is refused too: it is a request that has
+  not said what it wants, not a request for everybody.
+- **A restart nobody would carry out is refused, not reported.**
+  `restart_agent` reports success *before* acting, because the process that
+  would report it afterwards is the one being killed -- so it first asks
+  whether anything supervises it (`systemctl is-enabled`, `Get-ScheduledTask`).
+  An agent started by hand would otherwise detach a command that does nothing
+  while the console said "succeeded" about a shop that never came back. The
+  check runs as a `precheck` on the handler, before the caller commits to the
+  report, because a refusal raised afterwards is a refusal nobody hears.
+- **A device command is a row, and it expires.** Restarting the machine in a
+  shop goes through one route both an owner and an admin reach
+  (`POST /v1/owner/kiosks/{id}/device/commands`) -- the old backend had
+  `/kiosk/printers/{id}/restart` for an owner and a second copy in `pi.py` for
+  an admin, and they drifted. The machine claims it over HTTP like a print
+  task, because the socket carries a wake and never work. Unlike a print task
+  it goes stale: a restart asked for at four and run at five restarts a shop
+  that has been printing again for an hour. Asking twice while one is waiting
+  returns the first, because a button that appears to do nothing gets pressed
+  again.
+- **`restart_printing`, never `restart_cups`.** It is CUPS on a Pi and the
+  Print Spooler on Windows; a name that is true on half the estate is
+  `price_cents` holding rupees. There is deliberately no Ghostscript command --
+  a copy runs for one file and exits, so a button would be a placebo.
+- **A stuck printer closes the shop, and only reopens one it closed.** The
+  agent tells `/v1/device/printer-health` when a job will not come out; the
+  kiosk moves to MAINTENANCE, which `is_selling` already excludes, so students
+  stop being offered it while every operator surface still shows it and says
+  why. `KioskDevice.stuck_since` is what says *we* are the reason: an owner who
+  put their own shop into maintenance to change a cartridge must not have it
+  reopened by a queue clearing. A file Ghostscript refuses is not this --
+  `PrinterStuck` is a type in the agent precisely so one student's bad PDF
+  cannot close a working shop.
+- **A refund has one implementation and two doors.** `app/refunding.py` is the
+  use case; `/v1/admin/orders/{id}/refund` reaches every order and
+  `/v1/owner/kiosks/{id}/orders/{id}/refund` reaches the orders at kiosks the
+  caller holds. The difference is *which orders are visible* and nothing else --
+  the old backend had a refund in `kiosk.py` for an owner and a second in
+  `refunds.py` for an admin, each deciding independently whose Razorpay
+  collects, and that is how student money reached the wrong account. The kiosk
+  in the owner path is checked rather than decorative: an order at one of the
+  caller's *other* shops is 404 there, exactly as a stranger's is.
+- **A shop gives back money its own account collected.** One check --
+  `own_takings_only`, set by the owner door and not by the admin's -- with two
+  consequences that are never enforced a second time. The money comes back out
+  of the *owner's* Razorpay, because `credentials_for_payment` reads the same
+  `collecting_user_id`; and it can only go to the source, because a balance
+  refund is legal only where nobody else collected, which the check has just
+  refused. `OwnerRefundRequest` therefore has **no destination field at all** --
+  the question cannot be asked, so it cannot be answered wrongly. Platform
+  takings and balance-paid orders are refused there with a sentence naming who
+  to ask, and go back through the admin door instead.
+- **The owner refund route is the one place admin is not alongside.**
+  Everywhere else in `/v1/owner/*` admin is a wider kiosk scope through the
+  same route. This one is not about scope: an admin has collected nothing, so
+  the rule above could only ever refuse them. A 403 at the door says that; a
+  409 at the money would read as a bug.
+- **An invoice is the same document every time it is downloaded.** The number
+  is derived from the subscription (`PV-SUB_…`) and the date is read off the
+  capture, never `now`. A counter would have to survive a rollback and be
+  unique across the estate; the public id already is both, and a number you can
+  look the subscription up by is worth more than one that counts. It exists
+  only for money that arrived -- a pending purchase is a quote and a granted
+  trial cost nothing, and "TOTAL PAID" on either is a document somebody can
+  wave at a shop.
+- **Two documents, one letterhead.** `app/core/documents.py` holds the band,
+  the rule and the palette; `orders` renders a student's receipt and `billing`
+  an owner's invoice on top of it. They are separate bounded contexts and may
+  not import each other, so without a home in core the brand would exist twice
+  and drift -- and a shop would hold two papers from the same company that did
+  not look like the same company. Chrome only: the moment that file grows a
+  `total` it has become a second opinion about money.
+- **One refund, one audit entry.** The idempotency key is what makes a retry
+  safe, and `refund` returns the existing row either way -- so whether this is a
+  first attempt is asked *before* the refund, never after. Recording
+  unconditionally wrote `payment.refunded` twice for one refund, which an
+  operator reading the trail cannot tell from two refunds. This trail is the
+  only record there is: owners are paid directly, so there is no settlement run
+  in which the discrepancy would surface. Found by retrying the route, not by
+  reading it.
+- **A day ends where the shop is.** `earnings_by_day` buckets on
+  `captured_at AT TIME ZONE 'Asia/Kolkata'`, named once as
+  `REPORTING_TIMEZONE`. Every timestamp is stored in UTC, and a sale at half
+  past eight in the evening UTC happened at two the next morning in Karnataka --
+  bucketing in UTC files a late sale under the day before, and a shopkeeper
+  reconciling yesterday finds a figure matching nothing they saw.
+- **The day series is a query, not a chart.** `/v1/owner/earnings/daily` is the
+  same predicate and the same columns as the window total, grouped by day, so
+  the bars sum to the figure printed above them. The admin console used to add
+  one up client-side from the order export -- which caps at a row count,
+  buckets in UTC and cannot see a refund -- and the owner app was about to
+  build a second. Both now read this one. A quiet day inside the series is a
+  zero rather than a gap, because a missing day renders as a bar next to the
+  wrong neighbour; the series is *not* padded to the ends of the window, since
+  an owner asking about this year in March does not want nine months of empty
+  bars.
+- **A subscription settles from the browser as well as the webhook.**
+  `POST /v1/owner/billing/subscription/{id}/verify` checks the signature
+  against the **platform** key -- a subscription is always collected by the
+  platform, and reading the owner's keys there would let a shop sign its own
+  subscription into force. Both paths settle the same capture and the second is
+  refused by the unique payment id. Until it existed the webhook was the only
+  path, so an owner who had just paid sat on a page saying "not active" for as
+  long as the delivery took, or for ever if their endpoint was wrong -- which
+  is how somebody comes to pay twice.
 - **Enum columns use `core.db.EnumText`.** A `Mapped[SomeEnum]` column typed as
   a bare `String` returns a plain `str` after a database round-trip. These are
   StrEnums, so `value == Enum.X` still passes and tests stay green, while
@@ -305,7 +416,7 @@ documents describing the same thing is how they drift.
 
 ## State of play
 
-**1552 tests passing, 105 routes, 12 import contracts kept, ruff clean.** Verify with:
+**1674 tests passing, 115 routes, 12 import contracts kept, ruff clean.** Verify with:
 
 ```bash
 .venv/Scripts/python -m pytest -q && .venv/Scripts/lint-imports && .venv/Scripts/python -m ruff check .
@@ -315,19 +426,20 @@ documents describing the same thing is how they drift.
 
 | Area | What exists |
 |---|---|
-| `app/core/` | config, db (+`EnumText`), ids, money, errors, crypto, security, notifier |
+| `app/core/` | config, db (+`EnumText`), ids, money, errors, crypto, security, notifier, documents |
 | `identity/` | users, roles, sessions with rotation + reuse detection, password/Google/guest sign-in, email verification, password reset |
 | `kiosks/` | registry, types, onboarding + LIVE gate, pricing bands, paper (incl. consumption from device-reported sheets), assignments, consent-based staff invites, **the scope resolver** |
 | `payments/` | owner Razorpay keys encrypted at rest, set-once with approval, **the payment gate**, checkout + capture, in-house signature verification, one webhook per collecting account, **refunds** (gateway and balance, one path), now reachable over HTTP |
-| `billing/` | plans, subscriptions, trials, **purchase and renewal**, per-owner discounts (D13), one quote function |
+| `billing/` | plans, subscriptions, trials, **purchase and renewal**, per-owner discounts (D13), one quote function, **the subscription invoice** |
 | `orders/` | **the aggregate** — payment and print tasks commit together, so "paid but never printed" is unreachable; quotes + gateway fee, wallet and gateway as two branches into one commit, expiry that releases reserved paper |
 | `wallet/` | ledger-as-record with the balance derived from it, double-spend refused by a conditional UPDATE rather than a read-check-write, `UNIQUE (wallet_id, reference)` for replayed webhooks |
 | `printing/` | print options + the one workload calculation, Document and PrintTask models, **atomic claim with `FOR UPDATE SKIP LOCKED`** and lease recovery, storage (opaque keys), PDF pipeline (Ghostscript under `-dSAFER`), task progress + paper from device-reported sheets, photo→A4 layout, retention |
 | `ops/` | audit trail (one rule, matrix-enforced) and deduplicating admin alerts that stand down when the condition clears |
-| `api/` | `deps`, `student/*`, `owner/*` (incl. the orders CSV), `refiller/kiosks`, `device/*` (incl. **the WebSocket**), **`admin/*`**, **rate limits** — 97 routes, all in `tests/authz/matrix.py` |
+| `api/` | `deps`, `student/*`, `owner/*` (incl. the orders CSV, **device commands**, **the day series** and **an owner refund**), `refiller/kiosks`, `device/*` (incl. **the WebSocket**, **commands** and **printer health**), **`admin/*`**, **rate limits** — 114 routes, all in `tests/authz/matrix.py` |
 | `jobs/` | the scheduler and four sweeps: order expiry, file retention, the offline-kiosk watcher, the paper watcher |
 | `cli/` | `bootstrap-admin`, `seed`, `provision-kiosk` — the first way in, and a world to click through |
 | `provisioning` | one use case, two roots: stand a kiosk up and say what is still missing |
+| `refunding` | one use case, two doors: the admin's, over every order, and the owner's, over their own shops' |
 
 ### Not built yet, in dependency order
 
@@ -342,9 +454,16 @@ Raspberry Pi and a Windows PC, on `/v1/device/*`. It replaces `pi-agent/` and
 `windows-agent (1)/`, which stay in the repo until cutover and must not be
 edited. It polls rather than holding the wake socket, which works and is slower.
 
+The **admin console** is built: `../printvendo-admin`, three static files, no
+build step. It reaches every admin route plus the owner routes admin shares.
+`/docs` is no longer the admin surface.
+
+The **owner console** is on this API: `../printvendo-owner`, rewired off
+`cloud-backend`. Its own `CLAUDE.md` lists what was dropped rather than built.
+
 Not modules, but real and still unowned: push notifications, the paper-shop
-catalogue, the owner console, and per-account rate limits (as opposed to
-per-address ones). See `HANDOFF.md`.
+catalogue, and per-account rate limits (as opposed to per-address ones). See
+`HANDOFF.md`.
 
 ### Blocked on the operator
 
