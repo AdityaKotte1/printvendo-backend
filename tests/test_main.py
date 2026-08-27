@@ -134,3 +134,38 @@ def test_a_process_can_be_told_not_to_sweep(postgres_url):
 
     with TestClient(app):
         assert app.state.scheduler_task is None
+
+
+# ── the schema is a map of the estate ───────────────────────────────────────
+
+
+def _prod() -> Settings:
+    return SETTINGS.model_copy(
+        update={"ENV": "prod", "RAZORPAY_WEBHOOK_SECRET": "whsec_x"}
+    )
+
+
+def test_the_schema_is_not_published_in_production():
+    """Nothing behind `/docs` is unguarded -- every admin route sits behind
+    `require_role(ADMIN)` -- so this is disclosure rather than a bypass. It
+    still hands somebody the list of every route for nothing."""
+    client = TestClient(create_app(_prod()), raise_server_exceptions=False)
+
+    assert client.get("/docs").status_code == 404
+    assert client.get("/redoc").status_code == 404
+    assert client.get("/openapi.json").status_code == 404
+
+
+def test_the_schema_is_still_there_in_development():
+    """The other half, and the half that gets broken silently.
+
+    FastAPI mounts the docs routes only while `openapi_url` and `docs_url` are
+    *truthy*, so closing production with an empty string rather than `None`
+    closes development too -- and the way you find out is that the tool you
+    reach for every day is a 404. Asserting the prod side alone would pass for
+    a build with no schema anywhere.
+    """
+    client = TestClient(create_app(SETTINGS), raise_server_exceptions=False)
+
+    assert client.get("/docs").status_code == 200
+    assert client.get("/openapi.json").status_code == 200

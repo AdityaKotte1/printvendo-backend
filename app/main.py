@@ -82,7 +82,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 with suppress(asyncio.CancelledError):
                     await task
 
-    app = FastAPI(title="PrintVendo API", version=VERSION, lifespan=lifespan)
+    # The schema is a map of the estate. Nothing behind it is unguarded -- every
+    # admin route sits behind `require_role(ADMIN)` -- so publishing it is
+    # disclosure rather than a bypass, and closing it is free.
+    #
+    # The paths are spelled out rather than left empty for the non-prod case:
+    # FastAPI mounts the docs routes only while `openapi_url` and `docs_url` are
+    # *truthy*, so `""` would close development too, and the way anybody would
+    # find out is that the tool they reach for every day had become a 404.
+    app = FastAPI(
+        title="PrintVendo API",
+        version=VERSION,
+        lifespan=lifespan,
+        docs_url=None if settings.ENV == "prod" else "/docs",
+        redoc_url=None if settings.ENV == "prod" else "/redoc",
+        openapi_url=None if settings.ENV == "prod" else "/openapi.json",
+    )
     app.state.settings = settings
 
     # Order matters, and reads backwards: the last middleware added is the
