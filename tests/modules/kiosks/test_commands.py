@@ -241,3 +241,38 @@ def test_a_kiosk_that_is_not_live_is_not_moved(db_session, kiosk, device):
 
     assert report_stuck(db_session, device, kiosk, billing=BILLING) is False
     assert kiosk.onboarding_stage is OnboardingStage.SUSPENDED_BILLING
+
+
+def test_a_jam_while_a_person_has_the_shop_closed_does_not_hand_it_back(
+    db_session, kiosk, device
+):
+    """The sequence the earlier test misses, and the whole reason `stuck_since`
+    exists.
+
+    An owner puts the shop into maintenance to change a cartridge. A job that
+    was already queued jams, so the machine reports stuck -- and we do *not*
+    close the shop, because it is already closed and not by us. `stuck_since`
+    must therefore stay empty: it is the record of **our** decision, and
+    setting it here made the next recovery reopen a shop with the printer in
+    pieces on the counter.
+    """
+    kiosk.onboarding_stage = OnboardingStage.MAINTENANCE
+    db_session.flush()
+
+    assert report_stuck(db_session, device, kiosk, billing=BILLING) is False
+    assert device.stuck_since is None
+
+    # The jam clears. Nothing here is ours to reopen.
+    assert report_recovered(db_session, device, kiosk, billing=BILLING) is False
+    assert kiosk.onboarding_stage is OnboardingStage.MAINTENANCE
+
+
+def test_a_jam_at_a_suspended_shop_records_nothing_either(db_session, kiosk, device):
+    """Same rule, and it is the rule rather than a special case for
+    maintenance: a shop with a billing problem is not one a paper jam closed."""
+    kiosk.onboarding_stage = OnboardingStage.SUSPENDED_BILLING
+    db_session.flush()
+
+    assert report_stuck(db_session, device, kiosk, billing=BILLING) is False
+
+    assert device.stuck_since is None

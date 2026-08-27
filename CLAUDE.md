@@ -311,7 +311,13 @@ Copy `.env.example` to `.env` and fill it. The app refuses to boot with a
   put their own shop into maintenance to change a cartridge must not have it
   reopened by a queue clearing. A file Ghostscript refuses is not this --
   `PrinterStuck` is a type in the agent precisely so one student's bad PDF
-  cannot close a working shop.
+  cannot close a working shop. **`stuck_since` is written only where the shop is
+  actually closed**, and the order of those two checks is the whole guarantee:
+  it used to be set before the stage was read, so a jam at a shop an owner had
+  already put into maintenance recorded us as the reason -- and the next
+  recovery handed that shop back to students with the printer in pieces. The
+  matching release in `report_recovered` is *un*gated on purpose, so a claim is
+  never left on a shop somebody else has already reopened.
 - **A refund has one implementation and two doors.** `app/refunding.py` is the
   use case; `/v1/admin/orders/{id}/refund` reaches every order and
   `/v1/owner/kiosks/{id}/orders/{id}/refund` reaches the orders at kiosks the

@@ -234,17 +234,27 @@ def report_stuck(
     Only a LIVE kiosk is closed. One already in MAINTENANCE is where somebody
     put it, and one that is SUSPENDED_BILLING has a bigger problem than a
     paper jam.
+
+    **`stuck_since` is written only when we actually close the shop**, and the
+    order of these checks is the whole of that guarantee. It used to be set
+    before the stage was looked at, so a jam at a shop an owner had already put
+    into maintenance recorded us as the reason it was shut -- and the next
+    recovery then handed that shop back to students with the printer in pieces
+    on the counter. The field means "we did this"; anything else makes
+    `report_recovered` reopen a door it never closed.
     """
     now = now or datetime.now(UTC)
 
     if device.stuck_since is not None:
         return False
 
+    if kiosk.onboarding_stage is not OnboardingStage.LIVE:
+        # Nothing recorded. We are not why this shop is shut, and saying we are
+        # is how a person's decision gets undone by a queue clearing.
+        return False
+
     device.stuck_since = now
     db.add(device)
-
-    if kiosk.onboarding_stage is not OnboardingStage.LIVE:
-        return False
 
     move_to(db, kiosk, OnboardingStage.MAINTENANCE, billing=billing, note=STUCK_NOTE)
     return True
@@ -257,7 +267,18 @@ def report_recovered(
 
     Returns whether this call reopened it. `stuck_since` is the whole test: a
     kiosk in maintenance with nothing recorded here was put there by a person,
-    and a person is who takes it out again.
+    and a person is who takes it out again. `report_stuck` only writes that
+    field when it actually closes the shop, which is what makes the test mean
+    what it says.
+
+    **The claim is released unconditionally, before the stage is looked at, and
+    that is deliberate.** If an admin has already moved the kiosk out of
+    MAINTENANCE, there is nothing here to reopen -- but the machine is working
+    again, so we no longer hold a claim on it either. Gating the clear on the
+    stage would leave `stuck_since` set on a shop somebody else had already
+    reopened, and the next time an *owner* closed that shop for a cartridge, a
+    recovery would hand it back under them. That is the bug this field exists
+    to prevent, arrived at from the other direction.
     """
     if device.stuck_since is None:
         return False
