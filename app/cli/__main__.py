@@ -14,6 +14,7 @@ from app.cli.seed import DEFAULT_NAME, seed_demo
 from app.core.config import get_settings
 from app.core.db import session_scope
 from app.core.errors import AppError, Conflict
+from app.migration import legacy_engine, migrate_wallets, read_wallet_users
 from app.modules.identity import repository as identity_repo
 from app.modules.identity.roles import Role
 from app.modules.kiosks import KioskType, set_location, system_scope
@@ -74,6 +75,21 @@ def main(argv: list[str] | None = None) -> int:
     place.add_argument("--longitude", type=float, required=True)
     place.add_argument("--location", default=None, help="what a student would look for")
 
+    wallets = commands.add_parser(
+        "migrate-wallets",
+        help="carry legacy wallet balances onto accounts here (dry run by default)",
+    )
+    wallets.add_argument(
+        "--legacy-url",
+        required=True,
+        help="read-only URL of the restored legacy database",
+    )
+    wallets.add_argument(
+        "--apply",
+        action="store_true",
+        help="actually move the money; without this it only reports",
+    )
+
     args = parser.parse_args(argv)
     settings = get_settings()
 
@@ -119,6 +135,23 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 _report_kiosk(result, settings)
                 return 0
+
+            if args.command == "migrate-wallets":
+                # Read first, entirely, before anything is written. A migration
+                # that interleaved reads of one database with writes to another
+                # would leave half a cutover behind if the legacy connection
+                # dropped in the middle.
+                source = legacy_engine(args.legacy_url)
+                try:
+                    legacy_users = read_wallet_users(source)
+                finally:
+                    source.dispose()
+
+                report = migrate_wallets(db, legacy_users, apply=args.apply)
+                _report_wallets(report, applied=args.apply)
+                # A non-zero exit when something needs a person, so a script
+                # cannot treat "reported problems" as success.
+                return 1 if report.needs_a_person else 0
 
             if args.command == "place-kiosk":
                 # Through the same service the route calls, so the same
@@ -222,3 +255,45 @@ def _report(world, settings) -> None:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def _report_wallets(report, *, applied: bool) -> None:
+    """The figures somebody checks the run against, and the names they chase.
+
+    Printed rather than logged: this is read once, by a person, at the moment
+    they decide whether to carry on.
+    """
+    print("DRY RUN -- nothing was written" if not applied else "APPLIED")
+    print()
+    print(f"  accounts to create   {report.accounts_created}")
+    print(f"  accounts already here{report.accounts_matched:>4}")
+    print(f"  addresses merged     {report.addresses_merged}")
+    print(f"  money to carry       Rs {report.money_expected:,.2f}")
+
+    if applied:
+        print(f"  money carried        Rs {report.money_carried:,.2f}")
+        print(f"  wallets credited     {report.wallets_credited}")
+        print()
+        print(
+            "  reconciles           "
+            + ("yes" if report.reconciles else "NO -- see below")
+        )
+
+    if report.no_password:
+        print()
+        print(f"  {len(report.no_password)} account(s) arrive with no usable password.")
+        print("  They keep their money and must reset before signing in:")
+        for email in report.no_password[:20]:
+            print(f"    {email}")
+        if len(report.no_password) > 20:
+            print(f"    ... and {len(report.no_password) - 20} more")
+
+    if report.refused:
+        print()
+        print(f"  {len(report.refused)} account(s) were REFUSED and carried nothing:")
+        for line in report.refused[:20]:
+            print(f"    {line}")
+        if len(report.refused) > 20:
+            print(f"    ... and {len(report.refused) - 20} more")
+        print()
+        print("  Deal with these before anybody is told the cutover is done.")
