@@ -1,0 +1,100 @@
+# The whole of the new backend on one box. Four containers, one command.
+#
+# Only the backend lives here. printvendo-web, -owner and -admin are static
+# builds on Vercel/Netlify, so there is no web root to serve and Caddy has one
+# site rather than four.
+#
+# Run from this directory:  docker compose up -d
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Alpine's default 64MB /dev/shm is too small for Postgres parallel queries.
+    shm_size: 256mb
+    # A floor for Postgres, so a runaway Ghostscript cannot starve it.
+    mem_limit: 768m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  redis:
+    # Carries the device wake and the rate-limiter's counts. Persistence is off
+    # on purpose: both are derivable and both are allowed to be lost. Polling is
+    # the wake's fallback, and the limiter fails open.
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "no", "--save", ""]
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # A bind mount rather than a named volume, so `tar` in backup.sh can reach
+      # it by path. Losing this loses every queued student file and every
+      # bank-ownership proof an admin has yet to review.
+      - /opt/printvendo/storage:/var/lib/printvendo/storage
+    # One upload runs Ghostscript under -dSAFER with a hard timeout. Capping the
+    # API means a burst of image-heavy PDFs is OOM-killed here rather than
+    # taking Postgres down with it.
+    mem_limit: 2500m
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_started }
+    healthcheck:
+      # /health runs a real `select 1`. A 200 from the framework alone answers
+      # the one question nobody is asking.
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  caddy:
+    # Chosen over nginx for one reason: it gets and renews the TLS certificate
+    # itself, with no certbot and no cron.
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    mem_limit: 128m
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

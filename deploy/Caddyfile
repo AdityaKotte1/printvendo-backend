@@ -1,0 +1,19 @@
+{
+	email admin@printvendo.com
+}
+
+# One site. The three consoles are static builds hosted elsewhere and reach
+# this over CORS -- which is why CORS_ORIGINS in .env has to name every one of
+# their real deployed origins, Vercel and Netlify preview URLs included if you
+# want those to work.
+api.printvendo.com {
+	encode zstd gzip
+
+	# Students upload PDFs through here. Comfortably above the largest document
+	# worth printing, comfortably below a denial of service.
+	request_body {
+		max_size 80MB
+	}
+
+	reverse_proxy api:8000
+}
