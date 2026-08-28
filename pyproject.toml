@@ -19,7 +19,12 @@ dependencies = [
     # beside this one, to count integers. See app/core/ratelimit.py.
     "redis>=5.2",
     "cryptography>=43.0",
-    "google-auth>=2.35",
+    # The [requests] extra, not bare google-auth. `verify_oauth2_token` needs a
+    # transport, and the only one it ships builds on `requests` -- which
+    # google-auth does not depend on. A dev virtualenv has it transitively and
+    # signs in fine; the production image does not, so every Google sign-in
+    # failed there and nowhere else.
+    "google-auth[requests]>=2.35",
     # PDF structure parsing at upload time. libqpdf, so it reads the structure
     # without rendering -- milliseconds, and nothing to execute.
     "pikepdf>=9.4",

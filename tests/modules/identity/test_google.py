@@ -23,6 +23,25 @@ def verifier():
     return _verify
 
 
+def test_the_real_verifier_can_build_its_transport():
+    """The one test here that does not inject a fake.
+
+    Every other test in this file passes `verifier`, so the *real* verifier was
+    never touched and its dependencies were never exercised. It needs a
+    transport, and the only one google-auth ships is built on `requests` --
+    which google-auth itself does not depend on. A dev virtualenv has requests
+    transitively and signs in perfectly; the production image did not, so
+    `verify_oauth2_token` raised on the very first line and every Google sign-in
+    in production failed while every test passed.
+
+    Constructing the transport is enough and stays offline. Verifying a real
+    token would need the network and a token that expires within the hour.
+    """
+    from google.auth.transport import requests as google_transport
+
+    assert google_transport.Request() is not None
+
+
 def test_creates_an_account_on_first_sign_in(db_session, verifier):
     user = sign_in_with_google(db_session, "good", "client-id", verifier)
     db_session.flush()
