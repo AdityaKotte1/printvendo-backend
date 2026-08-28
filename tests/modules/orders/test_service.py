@@ -634,6 +634,67 @@ def test_an_order_completes_when_every_document_has_printed(db_session, user, ki
     assert order.state is OrderState.COMPLETED
 
 
+def test_an_abandoned_order_for_the_same_document_does_not_strand_the_paid_one(
+    db_session, user, kiosk
+):
+    """The bug that produced a morning of refunds at three live kiosks.
+
+    A student picks wallet, presses Pay -- an order is placed -- then switches
+    to card and presses Pay again. The app placed a *second* order over the same
+    documents and left the first unpaid. Both order_items rows name that
+    document, and a PrintTask links to a document rather than to an order, so
+    when the print finished `refresh_order_state` looked the document up with
+    `.first()` -- no ordering, no filter on state -- and got the abandoned
+    order. That one is AWAITING_PAYMENT, so the "has this settled?" guard
+    returned early and the *paid* order was never advanced.
+
+    It stayed PAID for ever with its task sitting at PRINTED. Operators read
+    that as "paid but never printed" and refunded jobs that had come out.
+    Every order that failed this way had a twin; every order without one was
+    fine, which is what made it look like a printer fault.
+    """
+    from app.modules.orders.service import pay_with_wallet, refresh_order_state
+    from app.modules.printing.models import TaskState
+
+    _funded(db_session, user, "twin_1")
+    document = make_document(db_session, user)
+
+    # The one they abandoned. Placed first, so it wins `.first()`.
+    abandoned = place_order(
+        db_session,
+        user=user,
+        kiosk=kiosk,
+        requests=[request_for(document)],
+        method=PaymentMethod.GATEWAY,
+    )
+    assert abandoned.state is OrderState.AWAITING_PAYMENT
+
+    # The one they actually paid, over the same document.
+    paid = place_order(
+        db_session,
+        user=user,
+        kiosk=kiosk,
+        requests=[request_for(document)],
+        method=PaymentMethod.WALLET,
+    )
+    pay_with_wallet(db_session, paid)
+
+    task = (
+        db_session.query(PrintTask)
+        .filter_by(kiosk_id=kiosk.id, document_id=document.id)
+        .order_by(PrintTask.id.desc())
+        .first()
+    )
+    task.state = TaskState.PRINTED
+    db_session.flush()
+
+    refresh_order_state(db_session, document_id=document.id, kiosk_id=kiosk.id)
+
+    assert paid.state is OrderState.COMPLETED
+    # And the abandoned one is untouched -- nobody paid for it.
+    assert abandoned.state is OrderState.AWAITING_PAYMENT
+
+
 def test_an_order_with_one_left_to_print_is_not_complete(db_session, user, kiosk):
     """Two files, one printed: the student is still waiting, and an order that
     said COMPLETED would take it off their screen."""

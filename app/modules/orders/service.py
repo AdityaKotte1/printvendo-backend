@@ -359,16 +359,37 @@ def refresh_order_state(db: Session, *, document_id: int, kiosk_id: int) -> Orde
     An order that has settled is left alone. A device reporting late must not
     resurrect one somebody has already been refunded for.
     """
+    # A document can appear in more than one order. The app places an order per
+    # payment attempt, so a student who picks wallet, presses Pay, then switches
+    # to card leaves an unpaid order over the same files behind -- and a
+    # PrintTask names a *document*, not an order, so this lookup has two
+    # candidates and no way to tell them apart from the document alone.
+    #
+    # It used to take `.first()` with no ordering and no filter, which meant the
+    # earliest row: the abandoned one. That order is AWAITING_PAYMENT, the
+    # settled-order guard below returned early, and the order that had actually
+    # been paid was never advanced. It stayed PAID for ever with its task sitting
+    # at PRINTED, which operators read as "paid but never printed" and refunded.
+    #
+    # Only an order that is in flight can own this print, so that is what is
+    # asked for -- the newest, since a student may legitimately reprint the same
+    # file later and the older order has already settled.
     item = db.execute(
-        select(OrderItem).where(OrderItem.document_id == document_id)
+        select(OrderItem)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(
+            OrderItem.document_id == document_id,
+            Order.kiosk_id == kiosk_id,
+            Order.state.in_((OrderState.PAID, OrderState.DISPATCHED)),
+        )
+        .order_by(Order.paid_at.desc())
+        .limit(1)
     ).scalars().first()
     if item is None:
         return None
 
     order = db.get(Order, item.order_id)
-    if order is None or order.kiosk_id != kiosk_id:
-        return None
-    if order.state not in (OrderState.PAID, OrderState.DISPATCHED):
+    if order is None:
         return None
 
     documents = [i.document_id for i in order.items if i.document_id is not None]
