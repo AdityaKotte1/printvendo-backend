@@ -74,6 +74,29 @@ def legacy_db(postgres_url: str):
     engine.dispose()
 
 
+@pytest.fixture(autouse=True)
+def clean_up_what_the_command_commits(postgres_url):
+    """Delete the rows `main()` leaves behind in the real database.
+
+    Every other test runs inside a transaction the fixtures roll back. `main()`
+    cannot: it opens its own session and commits, which is the whole point of
+    testing the entry point rather than the function underneath it. Those rows
+    therefore outlive the test -- and the next test that sums every wallet in
+    the database finds forty rupees nobody in that test put there.
+
+    It cost a confusing half hour: `tests/modules/wallet/` passes alone and
+    fails after this file, so the failure looked like flakiness in the ledger
+    rather than litter from here. Every foreign key to `users` is ON DELETE
+    CASCADE, so deleting the account takes its wallet, its entries and its role
+    with it.
+    """
+    yield
+    engine = legacy_engine(postgres_url)
+    with engine.begin() as connection:
+        connection.execute(text("delete from users where email like '%@x.edu'"))
+    engine.dispose()
+
+
 def _add(engine, email: str, balance: str, *, name="Ravi Kumar", password="pbkdf2$x"):
     with engine.begin() as connection:
         user_id = connection.execute(

@@ -8,6 +8,7 @@ The verifier is injected so tests can exercise this without the network. The
 default is the real one.
 """
 
+import logging
 import secrets
 from collections.abc import Callable
 
@@ -20,6 +21,8 @@ from app.modules.identity.models import User
 from app.modules.identity.roles import Role
 
 Verifier = Callable[[str, str], dict]
+
+logger = logging.getLogger(__name__)
 
 COULD_NOT_VERIFY = "That Google sign-in could not be verified."
 
@@ -47,9 +50,17 @@ def sign_in_with_google(
 
     try:
         claims = verifier(token, client_id)
-    except ValueError as exc:
-        raise BadRequest(COULD_NOT_VERIFY) from exc
     except Exception as exc:  # noqa: BLE001 - google-auth raises broadly
+        # The caller is told one generic sentence on purpose: which part of a
+        # token failed is a hint worth withholding from somebody probing. The
+        # operator needs the opposite, and this used to tell them nothing --
+        # a clock a few seconds out, an unreachable certificate endpoint and a
+        # forged token all produced the same 400 and the same silent log, so
+        # the only way to tell them apart was to reconstruct the verification
+        # by hand somewhere else. google-auth's messages are already precise
+        # ("Token used too early", "Token expired", "Wrong recipient"); the
+        # bug was throwing them away.
+        logger.warning("Google sign-in rejected a token: %s", exc)
         raise BadRequest(COULD_NOT_VERIFY) from exc
 
     email = claims.get("email")

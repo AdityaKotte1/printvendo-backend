@@ -72,6 +72,25 @@ def test_an_invalid_token_is_rejected(db_session, verifier):
         sign_in_with_google(db_session, "bad", "client-id", verifier)
 
 
+def test_the_reason_a_token_was_rejected_reaches_the_log(db_session, verifier, caplog):
+    """The caller gets one generic sentence; the operator gets the real reason.
+
+    Written after a valid Google token was refused in production and the only
+    trace of it anywhere was a 400. google-auth says exactly what was wrong --
+    "Token used too early" for a slow clock, "Wrong recipient" for a client id
+    mismatch -- and this used to discard it, so those two, plus a genuinely
+    forged token, were indistinguishable from the outside and from the logs.
+    """
+    with caplog.at_level("WARNING"):
+        with pytest.raises(BadRequest) as refused:
+            sign_in_with_google(db_session, "bad", "client-id", verifier)
+
+    # The user is told nothing specific.
+    assert "Invalid token" not in str(refused.value.detail)
+    # The operator is told everything.
+    assert "Invalid token" in caplog.text
+
+
 def test_a_token_without_an_email_is_rejected(db_session, verifier):
     with pytest.raises(BadRequest):
         sign_in_with_google(db_session, "no-email", "client-id", verifier)
