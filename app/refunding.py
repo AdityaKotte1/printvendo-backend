@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from app.core.crypto import SecretBox
 from app.core.errors import Conflict, NotFound
+from app.modules.identity import User
 from app.modules.ops import audit
 from app.modules.orders import Order
 from app.modules.payments import (
@@ -70,6 +71,12 @@ class IssuedRefund:
     destination: str
     refunded_total_inr: Decimal
     created_at: datetime
+
+
+GUEST_HAS_NO_WALLET = (
+    "That order was placed by a guest, who has no balance to credit. "
+    "Refund it to the original payment method instead."
+)
 
 
 def _destination(payment: Payment, asked: str | None) -> RefundDestination:
@@ -141,6 +148,16 @@ def refund_an_order(
         amount_inr = payment.amount_inr - payment.refunded_inr
 
     where = _destination(payment, destination)
+
+    # A guest has no way to spend a balance -- the student app offers them the
+    # gateway and nothing else -- so crediting one is putting the money where
+    # the person it belongs to can never reach it. The derived default already
+    # sends a card payment back to source; this refuses an operator who asks
+    # for wallet by hand, which was the only way to get here.
+    if where is RefundDestination.WALLET:
+        payer = db.get(User, order.user_id)
+        if payer is not None and payer.is_guest:
+            raise Conflict(GUEST_HAS_NO_WALLET)
 
     # Only a to-source refund needs an account to act on. Asking for the
     # credentials of a wallet payment is refused outright -- rightly, since it

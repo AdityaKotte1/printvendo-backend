@@ -113,6 +113,27 @@ def student(db_session) -> User:
 
 
 @pytest.fixture
+def a_guest(db_session) -> User:
+    """Somebody who checked out without an account.
+
+    The student app offers a guest the gateway and nothing else, so a guest can
+    never spend a balance -- which is what makes crediting one a way of losing
+    their money rather than returning it.
+    """
+    person = _user(db_session, "guest-1@guests.printvendo", Role.STUDENT)
+    person.is_guest = True
+    db_session.flush()
+    credit(
+        db_session,
+        user_id=person.id,
+        amount=Decimal("500.00"),
+        kind=EntryKind.TOPUP,
+        reference="guest_seed",
+    )
+    return person
+
+
+@pytest.fixture
 def kiosk(db_session) -> Kiosk:
     kiosk = Kiosk(
         name="Refund Shop",
@@ -278,3 +299,41 @@ def test_the_refund_is_recorded_against_whoever_issued_it(
     trail = entries_for(db_session, action="payment.refunded")
     assert trail, "the refund left no trail"
     assert trail[0].actor_user_id == admin.id
+
+
+def test_a_guest_cannot_be_refunded_to_a_balance_they_cannot_spend(
+    client, db_session, admin_auth, a_guest, kiosk
+):
+    """The derived default already sends a card payment back to source, so this
+    is only reachable by an operator asking for wallet by hand -- and it looks
+    like the kind thing to do until you notice the guest has no way to spend it.
+    The student app offers a guest the gateway and nothing else. The refusal
+    names the alternative rather than just saying no.
+    """
+    document = Document(
+        user_id=a_guest.id,
+        original_filename="guest.pdf",
+        page_count=10,
+        original_path="originals/2026/08/g.pdf",
+        state=DocumentState.READY,
+    )
+    db_session.add(document)
+    db_session.flush()
+
+    order = place_order(
+        db_session,
+        user=a_guest,
+        kiosk=kiosk,
+        requests=[
+            RequestedDocument(
+                document=document, options=PrintOptions.create(total_pages=10)
+            )
+        ],
+        method=PaymentMethod.WALLET,
+    )
+    pay_with_wallet(db_session, order)
+
+    refused = _refund(client, admin_auth, order, destination="wallet")
+
+    assert refused.status_code == 409, refused.text
+    assert "guest" in refused.json()["detail"].lower()
