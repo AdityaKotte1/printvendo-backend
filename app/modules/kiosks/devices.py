@@ -29,7 +29,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.errors import BadRequest, Unauthorized
+from app.core.errors import BadRequest, Conflict, Unauthorized
 from app.modules.kiosks.enums import DeviceStatus, OnboardingStage
 from app.modules.kiosks.models import DeviceEnrolment, Kiosk, KioskDevice
 
@@ -141,6 +141,31 @@ def register_device(
     kiosk = db.get(Kiosk, row.kiosk_id)
     if kiosk is None or kiosk.onboarding_stage is OnboardingStage.RETIRED:
         raise BadRequest(INVALID_CODE)
+
+    # `device_key` is unique across the whole estate, and the agent derives it
+    # from the machine -- hostname and architecture -- so it is the same string
+    # every time that box enrols. A key already held by a *different* kiosk
+    # therefore means this machine is still attached somewhere else.
+    #
+    # That used to reach the write and fail on the unique constraint, so an
+    # installer standing at a shop counter got a bare 500 and "Something went
+    # wrong. Please try again" -- for a condition where trying again could never
+    # work, and with no way to learn which shop was holding the machine.
+    #
+    # Refused rather than moved, deliberately. Two machines can share a
+    # hostname, and silently detaching one shop's Pi because another box also
+    # calls itself `raspberrypi` would close a working kiosk to fix a typo.
+    if device_key:
+        held = db.execute(
+            select(KioskDevice).where(KioskDevice.device_key == device_key)
+        ).scalar_one_or_none()
+        if held is not None and held.kiosk_id != kiosk.id:
+            elsewhere = db.get(Kiosk, held.kiosk_id)
+            where = elsewhere.name if elsewhere is not None else "another kiosk"
+            raise Conflict(
+                f"That machine is already enrolled at {where}. Unenrol it there "
+                "first — a machine can only serve one kiosk."
+            )
 
     token = f"{TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
 

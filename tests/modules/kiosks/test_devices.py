@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.core.errors import BadRequest, Unauthorized
+from app.core.errors import BadRequest, Conflict, Unauthorized
 from app.modules.kiosks.devices import (
     ENROLMENT_LIFETIME,
     HEARTBEAT_WINDOW,
@@ -61,6 +61,44 @@ def test_registering_with_a_code_gives_the_device_a_token(db_session, kiosk):
     assert issued.token
     assert issued.device.kiosk_id == kiosk.id
     assert issued.device.agent_version == "2.0.0"
+
+
+def test_a_machine_enrolled_elsewhere_is_refused_with_the_shop_that_holds_it(
+    db_session, kiosk, other_kiosk
+):
+    """`device_key` is unique across the estate and the agent derives it from
+    the machine (hostname and architecture), so it is the same string every time
+    that box enrols.
+
+    An operator who had assigned Pis to the wrong shops tried to move one, and
+    both branches below assign device_key -- so the insert hit the unique
+    constraint and the installer got a bare 500 saying "Something went wrong.
+    Please try again", at a shop counter, with no way to learn that the machine
+    was still attached somewhere else. Retrying could never work.
+
+    Refused rather than moved: two different machines can share a hostname, and
+    silently detaching one shop's Pi because another box calls itself
+    `raspberrypi` would close a working kiosk.
+    """
+    register_device(db_session, enrol(db_session, other_kiosk), device_key="pi-1-aarch64")
+    db_session.flush()
+
+    with pytest.raises(Conflict) as refused:
+        register_device(db_session, enrol(db_session, kiosk), device_key="pi-1-aarch64")
+
+    # Names the shop to go and detach it from, or the operator is still stuck.
+    assert other_kiosk.name in refused.value.detail
+
+
+def test_the_same_machine_re_enrolling_at_its_own_kiosk_is_fine(db_session, kiosk):
+    """Re-enrolling in place is ordinary -- a token rotation, not a move."""
+    first = register_device(db_session, enrol(db_session, kiosk), device_key="pi-1-aarch64")
+    db_session.flush()
+
+    second = register_device(db_session, enrol(db_session, kiosk), device_key="pi-1-aarch64")
+
+    assert second.device.id == first.device.id
+    assert second.token != first.token
 
 
 def test_the_device_token_is_stored_only_as_a_hash(db_session, kiosk):
