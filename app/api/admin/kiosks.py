@@ -41,6 +41,7 @@ from app.api.schemas import (
     InviteOwnerRequest,
     KioskLocationRequest,
     KioskTypeChangeRequest,
+    KioskWalletRequest,
     PaperResponse,
     ProvisionedKioskResponse,
     ProvisionKioskRequest,
@@ -63,6 +64,7 @@ from app.modules.kiosks import (
     invite_staff,
     is_selling,
     move_to,
+    set_accepts_wallet,
     set_location,
     sheets_remaining,
 )
@@ -304,6 +306,45 @@ def set_type(
             "kiosk_type": KioskType(kiosk.kiosk_type).value,
             "onboarding_stage": OnboardingStage(kiosk.onboarding_stage).value,
         },
+    )
+    return _as_response(db, kiosk)
+
+
+@router.put("/{kiosk_id}/wallet", response_model=AdminKioskResponse)
+def set_wallet(
+    kiosk_id: str,
+    body: KioskWalletRequest,
+    admin: CurrentAdmin,
+    scope: KioskScope,
+    db: Annotated[Session, Depends(get_db)],
+) -> AdminKioskResponse:
+    """Whether student balance may be spent at this kiosk.
+
+    The column defaults to False and, until this route existed, only
+    `provisioning` ever set it -- so a kiosk created through this API offered a
+    student no way to spend the balance they were holding, and there was
+    nothing anywhere that could change that. Found at a live platform kiosk
+    where the wallet option simply was not there.
+
+    Admin-only, and it does not decide legality: `set_accepts_wallet` refuses
+    to enable it wherever the owner collects, because top-ups are money
+    Printvendo holds and spending them at such a shop would have Printvendo
+    keep the cash while the shop prints for free. This route can only ever
+    close a door the gate has already opened.
+    """
+    kiosk = kiosk_repo.get_kiosk(db, scope, kiosk_id)
+    before = bool(kiosk.accepts_wallet)
+
+    set_accepts_wallet(db, kiosk, accepts_wallet=body.accepts_wallet)
+
+    audit.record(
+        db,
+        action="kiosk.wallet.changed",
+        entity_type="kiosk",
+        entity_id=kiosk.public_id,
+        actor_user_id=admin.id,
+        before={"accepts_wallet": before},
+        after={"accepts_wallet": bool(kiosk.accepts_wallet)},
     )
     return _as_response(db, kiosk)
 

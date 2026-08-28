@@ -123,6 +123,7 @@ AUDIT_MATRIX: dict[tuple[str, str], tuple[str, str]] = {
     ("POST", "/v1/admin/kiosks"): (AUDITED, ""),
     ("POST", "/v1/admin/kiosks/{kiosk_id}/stage"): (AUDITED, ""),
     ("PUT", "/v1/admin/kiosks/{kiosk_id}/type"): (AUDITED, ""),
+    ("PUT", "/v1/admin/kiosks/{kiosk_id}/wallet"): (AUDITED, ""),
     ("POST", "/v1/admin/kiosks/{kiosk_id}/owner"): (AUDITED, ""),
     # Commercial terms. A rate nobody can explain in a year's time is a rate
     # somebody will argue about, and the row holds only the current figure --

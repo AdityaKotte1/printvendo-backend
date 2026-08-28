@@ -793,6 +793,17 @@ class KioskTypeChangeRequest(BaseModel):
     type: str
 
 
+class KioskWalletRequest(BaseModel):
+    """Whether student balance may be spent at this kiosk.
+
+    A switch on top of the payment gate, never an override: turning it on at a
+    kiosk whose owner collects is refused, because top-ups are money Printvendo
+    holds.
+    """
+
+    accepts_wallet: bool
+
+
 class InviteOwnerRequest(BaseModel):
     email: str
 

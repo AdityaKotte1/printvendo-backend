@@ -244,6 +244,72 @@ def test_a_type_that_is_not_a_type_is_refused(client, admin_auth):
     assert refused.status_code == 400
 
 
+# -- whether the wallet may be spent there ----------------------------------
+
+
+def test_a_platform_kiosk_can_be_told_to_take_the_wallet(client, admin_auth):
+    """`accepts_wallet` defaults to False and only `provisioning` ever turned
+    it on -- so a kiosk created through this API had no payment method a
+    student could use their balance with, and nothing anywhere could change
+    that. Found at a live platform kiosk with the wallet option missing.
+    """
+    kiosk_id = _create(client, admin_auth).json()["id"]
+
+    turned_on = client.put(
+        f"{KIOSKS}/{kiosk_id}/wallet", headers=admin_auth, json={"accepts_wallet": True}
+    )
+
+    assert turned_on.status_code == 200, turned_on.text
+    assert turned_on.json()["accepts_wallet"] is True
+
+
+def test_it_can_be_turned_off_again(client, admin_auth):
+    """An operator may close the wallet at a platform kiosk -- the flag is a
+    switch on top of the gate, not a description of it."""
+    kiosk_id = _create(client, admin_auth).json()["id"]
+    client.put(
+        f"{KIOSKS}/{kiosk_id}/wallet", headers=admin_auth, json={"accepts_wallet": True}
+    )
+
+    off = client.put(
+        f"{KIOSKS}/{kiosk_id}/wallet", headers=admin_auth, json={"accepts_wallet": False}
+    )
+
+    assert off.status_code == 200
+    assert off.json()["accepts_wallet"] is False
+
+
+def test_an_owner_gateway_kiosk_cannot_be_told_to_take_the_wallet(client, admin_auth):
+    """Top-ups are money Printvendo holds. Spending them where the owner
+    collects would have Printvendo keep the cash while the shop prints for
+    free. Refused at the setter, so the route cannot grant it."""
+    kiosk_id = _create(client, admin_auth).json()["id"]
+    client.put(f"{KIOSKS}/{kiosk_id}/type", headers=admin_auth, json={"type": "sold"})
+
+    refused = client.put(
+        f"{KIOSKS}/{kiosk_id}/wallet", headers=admin_auth, json={"accepts_wallet": True}
+    )
+
+    assert refused.status_code == 400
+    assert "Printvendo" in refused.json()["detail"]
+
+
+def test_changing_the_wallet_setting_is_recorded(client, admin_auth, db_session):
+    kiosk_id = _create(client, admin_auth).json()["id"]
+
+    client.put(
+        f"{KIOSKS}/{kiosk_id}/wallet", headers=admin_auth, json={"accepts_wallet": True}
+    )
+
+    entry = next(
+        e
+        for e in entries_for(db_session, entity_type="kiosk", entity_id=kiosk_id)
+        if e.action == "kiosk.wallet.changed"
+    )
+    assert entry.before == {"accepts_wallet": False}
+    assert entry.after == {"accepts_wallet": True}
+
+
 # -- giving it an owner -----------------------------------------------------
 
 
