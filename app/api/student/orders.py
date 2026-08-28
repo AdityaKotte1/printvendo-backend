@@ -34,7 +34,8 @@ from app.api.schemas import (
     PlaceOrderRequest,
     VerifyPaymentRequest,
 )
-from app.api.student.kiosks import UNRESTRICTED
+from app.api.student.kiosks import NO_SUCH_KIOSK, UNRESTRICTED
+from app.api.student.visibility import student_may_order
 from app.core.config import Settings
 from app.core.crypto import SecretBox
 from app.core.errors import BadRequest, Conflict, NotFound
@@ -143,6 +144,13 @@ def place(
     charged first and discovered the tray afterwards.
     """
     kiosk = kiosk_repo.get_kiosk(db, UNRESTRICTED, body.kiosk_id)
+    # The same rule the map uses. Without it a shop could vanish from the list
+    # -- its machine offline -- while an order placed from a page opened a
+    # minute earlier still went through, took the money and queued work nobody
+    # would collect. 404 rather than a refusal, so it reads exactly like a shop
+    # that is not there, which from the student's side is what it is.
+    if not student_may_order(db, kiosk):
+        raise NotFound(NO_SUCH_KIOSK)
 
     requests: list[RequestedDocument] = []
     for line in body.items:

@@ -13,7 +13,7 @@ request -- so if the response says paid, the tasks exist.
 
 import hashlib
 import hmac
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -26,8 +26,8 @@ from app.core.notifier import NullNotifier
 from app.core.security import TokenType, create_token
 from app.main import create_app
 from app.modules.identity.models import User
-from app.modules.kiosks.enums import KioskType, OnboardingStage
-from app.modules.kiosks.models import Kiosk, KioskPaper
+from app.modules.kiosks.enums import DeviceStatus, KioskType, OnboardingStage
+from app.modules.kiosks.models import Kiosk, KioskDevice, KioskPaper
 from app.modules.printing.models import Document, DocumentState, PrintTask
 from app.modules.wallet.ledger import credit
 from app.modules.wallet.models import EntryKind
@@ -115,6 +115,28 @@ def kiosk(db_session) -> Kiosk:
     db_session.add(kiosk)
     db_session.flush()
     db_session.add(KioskPaper(kiosk_id=kiosk.id, capacity=500, used=0))
+    # A shop with no machine reporting in is shut, so a kiosk a student can
+    # order at needs one that has beaten recently. Before that rule existed a
+    # kiosk whose Pi had lost power stayed on the map and took payment for work
+    # nothing would ever collect.
+    db_session.add(
+        KioskDevice(
+            kiosk_id=kiosk.id,
+            device_key="test-device",
+            token_hash="x" * 64,
+            status=DeviceStatus.ONLINE,
+            last_heartbeat_at=datetime.now(UTC),
+        )
+    )
+    db_session.flush()
+    return kiosk
+
+
+@pytest.fixture
+def dark(db_session, kiosk) -> Kiosk:
+    """The same shop with its machine gone quiet."""
+    device = db_session.query(KioskDevice).filter_by(kiosk_id=kiosk.id).one()
+    device.last_heartbeat_at = datetime.now(UTC) - timedelta(hours=1)
     db_session.flush()
     return kiosk
 
@@ -693,3 +715,41 @@ def test_an_ordinary_page_range_still_works(client, auth, kiosk, document):
     )
 
     assert response.status_code == 201, response.text
+
+
+# -- a shop with nobody home ------------------------------------------------
+
+
+def test_a_kiosk_whose_machine_is_offline_is_not_offered(client, auth, dark):
+    """Students were being shown shops whose Pi had lost power or wifi, paying
+    at them, and standing there waiting. The queue filled with work nothing was
+    ever going to collect, and it surfaced as a refund list rather than as a
+    shop that was shut.
+    """
+    listed = client.get("/v1/app/kiosks", headers=auth)
+
+    assert listed.status_code == 200
+    assert [k for k in listed.json() if k["id"] == dark.public_id] == []
+
+
+def test_a_kiosk_whose_machine_is_offline_cannot_be_ordered_at(
+    client, auth, dark, document, db_session
+):
+    """The listing alone is not enough. A student already on the pay screen
+    when the machine went dark would otherwise still pay -- the order route
+    resolved the kiosk directly and never asked whether it was open.
+    """
+    refused = client.post(
+        "/v1/app/orders",
+        headers=auth,
+        json={
+            "kiosk_id": dark.public_id,
+            "payment_method": "gateway",
+            "items": [{"document_id": document.public_id, "colour": False,
+                       "duplex": False, "copies": 1, "page_range": None}],
+        },
+    )
+
+    # 404, not 409: from the student's side it is a shop that is not there.
+    assert refused.status_code == 404
+    assert db_session.query(PrintTask).count() == 0

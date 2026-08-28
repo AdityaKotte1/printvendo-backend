@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import CurrentUser, get_db
 from app.api.schemas import StudentKioskResponse
+from app.api.student.visibility import student_may_order
 from app.core.errors import NotFound
 from app.core.ids import IdPrefix, InvalidId, parse_id
 from app.modules.kiosks import (
@@ -32,9 +33,7 @@ from app.modules.kiosks import (
     unfavourite_kiosk,
 )
 from app.modules.kiosks import repository as kiosk_repo
-from app.modules.kiosks.enums import OnboardingStage
 from app.modules.kiosks.scope import Scope
-from app.modules.payments import can_take_payment
 
 router = APIRouter(prefix="/v1/app/kiosks", tags=["student"])
 
@@ -48,10 +47,12 @@ UNRESTRICTED = Scope(is_unrestricted=True, kiosk_ids=frozenset())
 
 
 def _printable(db: Session, kiosk: Kiosk) -> bool:
-    """Whether a student may order here at all."""
-    return kiosk.onboarding_stage is OnboardingStage.LIVE and can_take_payment(
-        db, kiosk
-    )
+    """Whether a student may order here at all.
+
+    Delegates rather than deciding: the order route needs the same answer, and
+    when this file held the rule alone that route did not ask it.
+    """
+    return student_may_order(db, kiosk)
 
 
 def _as_response(
