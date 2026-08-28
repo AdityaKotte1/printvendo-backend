@@ -61,6 +61,7 @@ from app.modules.payments import (
     Credentials,
     Gateway,
     PaymentKind,
+    PaymentStatus,
     RazorpayGateway,
     confirm_payment,
     open_checkout,
@@ -266,6 +267,18 @@ def verify_subscription_payment(
     # different purchase cannot start this one's term.
     if payment is None or payment.subscription_id != subscription.id:
         raise NotFound(NO_CHECKOUT)
+
+    # Same race as the student's order: this route exists precisely because the
+    # webhook may be slow or misconfigured, so the browser settling second is
+    # the ordinary case rather than the exception. A 409 here told an owner who
+    # had just paid that their payment could not be confirmed, on a page that
+    # already said their subscription was not active.
+    if (
+        payment.status is PaymentStatus.CAPTURED
+        and payment.razorpay_payment_id == body.razorpay_payment_id
+    ):
+        activate_subscription(db, subscription)
+        return _as_subscription(subscription)
 
     confirm_payment(
         db,

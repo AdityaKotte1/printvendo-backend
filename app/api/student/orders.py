@@ -56,6 +56,7 @@ from app.modules.orders import (
 )
 from app.modules.payments import (
     PaymentKind,
+    PaymentStatus,
     RazorpayGateway,
     confirm_payment,
     credentials_for,
@@ -344,6 +345,23 @@ def verify(
         platform_key_id=settings.RAZORPAY_KEY_ID,
         platform_key_secret=settings.RAZORPAY_KEY_SECRET,
     )
+
+    # The webhook and the browser settle the same capture and either may be
+    # first, by design. If this exact payment is already recorded then the work
+    # is done and there is nothing to redo -- answering 409 here told a student
+    # "We could not confirm that payment, if money left your account it is
+    # refunded automatically" about money that had arrived and would not be
+    # refunded at all. Which of the two wins is a race between Razorpay's
+    # delivery and the student's connection, so it is neither rare nor
+    # reproducible on demand.
+    #
+    # Only the *same* payment id. A different one against a captured order is
+    # two real payments claiming one order, and stays a refusal below.
+    if (
+        payment.status is PaymentStatus.CAPTURED
+        and payment.razorpay_payment_id == body.razorpay_payment_id
+    ):
+        return _as_response(view_of(db, order))
 
     confirm_payment(
         db,

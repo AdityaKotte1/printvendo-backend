@@ -290,6 +290,82 @@ def test_a_gateway_order_is_paid_and_queued_over_http(
     assert db_session.query(PrintTask).filter_by(kiosk_id=kiosk.id).count() == 1
 
 
+def test_the_browser_arriving_after_the_webhook_is_told_it_worked(
+    client, auth, kiosk, document, db_session, razorpay
+):
+    """The webhook and the browser settle the same capture, and either may be
+    first. The second used to get a 409, and the student was shown "We could
+    not confirm that payment. If money left your account it is refunded
+    automatically." -- about a payment that had gone through perfectly and
+    would not be refunded at all.
+
+    Whether that happens is a race between Razorpay's delivery and the
+    student's connection, so it is not rare and it is not reproducible on
+    demand. This asserts the second one succeeds, and -- the part that makes it
+    safe -- that it does not queue the job a second time.
+    """
+    placed = place(client, auth, kiosk, document, method="gateway")
+    order = placed.json()
+    opened = client.post(f"/v1/app/orders/{order['id']}/checkout", headers=auth).json()
+
+    payment_id = "pay_RACE1"
+    body = {
+        "razorpay_order_id": opened["razorpay_order_id"],
+        "razorpay_payment_id": payment_id,
+        "razorpay_signature": hmac.new(
+            PLATFORM_KEY_SECRET.encode(),
+            f"{opened['razorpay_order_id']}|{payment_id}".encode(),
+            hashlib.sha256,
+        ).hexdigest(),
+    }
+
+    first = client.post(f"/v1/app/orders/{order['id']}/verify", headers=auth, json=body)
+    assert first.status_code == 200, first.text
+
+    second = client.post(f"/v1/app/orders/{order['id']}/verify", headers=auth, json=body)
+
+    assert second.status_code == 200, second.text
+    assert second.json()["state"] == "paid"
+    # One payment, one job. The whole reason this may answer 200.
+    assert db_session.query(PrintTask).filter_by(kiosk_id=kiosk.id).count() == 1
+
+
+def test_a_second_payment_against_a_captured_order_is_still_refused(
+    client, auth, kiosk, document, db_session
+):
+    """Idempotence is for the *same* payment arriving twice. A different
+    razorpay_payment_id against an order already captured is not a retry --
+    it is two real payments claiming one order, and must stay a refusal."""
+    placed = place(client, auth, kiosk, document, method="gateway")
+    order = placed.json()
+    opened = client.post(f"/v1/app/orders/{order['id']}/checkout", headers=auth).json()
+
+    def sign(payment_id: str) -> dict:
+        return {
+            "razorpay_order_id": opened["razorpay_order_id"],
+            "razorpay_payment_id": payment_id,
+            "razorpay_signature": hmac.new(
+                PLATFORM_KEY_SECRET.encode(),
+                f"{opened['razorpay_order_id']}|{payment_id}".encode(),
+                hashlib.sha256,
+            ).hexdigest(),
+        }
+
+    assert (
+        client.post(
+            f"/v1/app/orders/{order['id']}/verify", headers=auth, json=sign("pay_ONE")
+        ).status_code
+        == 200
+    )
+
+    other = client.post(
+        f"/v1/app/orders/{order['id']}/verify", headers=auth, json=sign("pay_TWO")
+    )
+
+    assert other.status_code == 409
+    assert db_session.query(PrintTask).filter_by(kiosk_id=kiosk.id).count() == 1
+
+
 def test_the_checkout_never_returns_the_key_secret(client, auth, kiosk, document):
     placed = place(client, auth, kiosk, document, method="gateway")
     body = client.post(
