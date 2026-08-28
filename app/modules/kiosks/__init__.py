@@ -61,6 +61,7 @@ from app.modules.kiosks.paper import (
     reset_paper,
     set_paper,
     sheets_remaining,
+    tray_capacity,
 )
 from app.modules.kiosks.pricing import (
     UNBOUNDED as UnboundedBand,
@@ -156,4 +157,5 @@ __all__ = [
     "reset_paper",
     "set_paper",
     "sheets_remaining",
+    "tray_capacity",
 ]

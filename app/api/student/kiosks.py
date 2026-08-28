@@ -30,6 +30,7 @@ from app.modules.kiosks import (
     favourite_kiosk,
     favourite_kiosk_ids,
     sheets_remaining,
+    tray_capacity,
     unfavourite_kiosk,
 )
 from app.modules.kiosks import repository as kiosk_repo
@@ -72,6 +73,7 @@ def _as_response(
         # disagree with the number printed next to it.
         is_out_of_paper=remaining <= 0,
         sheets_remaining=remaining,
+        paper_capacity=tray_capacity(db, kiosk),
         price_bw_single=prices["bw_single"],
         price_bw_double=prices["bw_double"],
         price_color_single=prices["color_single"],

@@ -39,6 +39,16 @@ def sheets_remaining(db: Session, kiosk: Kiosk) -> int:
     return max(0, paper.capacity - paper.used)
 
 
+def tray_capacity(db: Session, kiosk: Kiosk) -> int:
+    """How many sheets this tray holds when full.
+
+    Exposed because a bar drawn without it is a bar drawn against a guess: the
+    student app assumed a 500-sheet ream, so a 200-sheet tray that had just been
+    filled rendered as 40% and read as more than half gone.
+    """
+    return _paper(db, kiosk).capacity
+
+
 def _clear_warning_throttle(paper: KioskPaper) -> None:
     """Re-arm the low-paper alerts.
 

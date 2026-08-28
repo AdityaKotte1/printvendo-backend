@@ -277,6 +277,10 @@ class StudentKioskResponse(BaseModel):
     is_favourite: bool = False
     is_out_of_paper: bool
     sheets_remaining: int
+    # The tray's size, so the app can draw a bar against the real thing. Without
+    # it the app assumed a 500-sheet ream and a full 200-sheet tray looked
+    # two-fifths full.
+    paper_capacity: int
     price_bw_single: Decimal
     price_bw_double: Decimal
     price_color_single: Decimal

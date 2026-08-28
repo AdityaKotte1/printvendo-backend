@@ -224,6 +224,7 @@ def test_the_kiosk_list_says_nothing_about_who_owns_a_shop(client, auth, kiosk):
         "is_favourite",
         "is_out_of_paper",
         "sheets_remaining",
+        "paper_capacity",
         "price_bw_single",
         "price_bw_double",
         "price_color_single",
