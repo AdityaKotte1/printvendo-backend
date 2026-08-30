@@ -247,6 +247,7 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     # no route that lists everybody, so even an admin cannot walk it.
     ("GET", "/v1/admin/accounts"): {ADMIN},
     ("GET", "/v1/admin/accounts/{account_id}"): {ADMIN},
+    ("POST", "/v1/admin/accounts/{account_id}/wallet/credit"): {ADMIN},
     ("PUT", "/v1/admin/accounts/{account_id}/roles/{role}"): {ADMIN},
     ("DELETE", "/v1/admin/accounts/{account_id}/roles/{role}"): {ADMIN},
     ("POST", "/v1/admin/accounts/{account_id}/deactivate"): {ADMIN},

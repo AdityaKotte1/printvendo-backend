@@ -27,16 +27,22 @@ Three rules here are the point of the router:
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_role
-from app.api.schemas import AccountResponse
+from app.api.schemas import (
+    AccountResponse,
+    CreditedWalletResponse,
+    CreditWalletRequest,
+)
 from app.core.errors import BadRequest, NotFound
+from app.core.ids import IdPrefix, new_id
 from app.modules.identity import User, set_active
 from app.modules.identity import repository as identity_repo
 from app.modules.identity.roles import Role
 from app.modules.ops import audit
+from app.modules.wallet import EntryKind, balance_of, credit
 
 router = APIRouter(prefix="/v1/admin/accounts", tags=["admin"])
 
@@ -153,6 +159,67 @@ def one_account(
     db: Annotated[Session, Depends(get_db)],
 ) -> AccountResponse:
     return _as_response(db, _account(db, account_id))
+
+
+@router.post(
+    "/{account_id}/wallet/credit",
+    response_model=CreditedWalletResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def credit_wallet(
+    account_id: str,
+    body: CreditWalletRequest,
+    admin: CurrentAdmin,
+    db: Annotated[Session, Depends(get_db)],
+) -> CreditedWalletResponse:
+    """Put money in an account's wallet by hand.
+
+    This is how an admin prints without paying: credit an account, then pay
+    with the balance like anybody else. The print is an ordinary paid job the
+    whole way through -- one code path, no second kind of order, and nothing a
+    future report has to remember to exclude.
+
+    It is money appearing from nowhere, so two things hold it down. The entry
+    kind can only be ADJUSTMENT or PROMO, never TOPUP -- a hand-made top-up is
+    indistinguishable from money that actually arrived through the gateway, and
+    that is the one thing this must never look like. And the note is required,
+    because these entries are the line that explains why takings will not
+    reconcile against Razorpay by exactly this much.
+    """
+    user = _account(db, account_id)
+
+    entry = credit(
+        db,
+        user_id=user.id,
+        amount=body.amount,
+        kind=EntryKind(body.kind),
+        # Unique per credit, and it says what made it. `UNIQUE (wallet_id,
+        # reference)` is what stops a replayed webhook crediting twice; a
+        # hand-made credit needs its own value rather than borrowing one that
+        # means something else.
+        reference=f"admin:{admin.public_id}:{new_id(IdPrefix.WALLET_ENTRY)}",
+        note=body.note,
+    )
+    db.flush()
+
+    audit.record(
+        db,
+        action="wallet.credited",
+        entity_type="user",
+        entity_id=user.public_id,
+        actor_user_id=admin.id,
+        after={
+            "amount_inr": str(body.amount),
+            "kind": body.kind,
+            "note": body.note,
+        },
+    )
+
+    return CreditedWalletResponse(
+        account_id=user.public_id,
+        balance=balance_of(db, user_id=user.id),
+        entry_id=entry.public_id,
+    )
 
 
 @router.put("/{account_id}/roles/{role}", response_model=AccountResponse)

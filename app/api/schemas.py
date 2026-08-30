@@ -13,7 +13,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class PaperResponse(BaseModel):
@@ -795,6 +795,45 @@ class StageChangeRequest(BaseModel):
 
 class KioskTypeChangeRequest(BaseModel):
     type: str
+
+
+class CreditWalletRequest(BaseModel):
+    """An admin putting money in a wallet by hand.
+
+    This is the path an admin uses to print without paying: credit an account,
+    then pay with the balance like anybody else. The print is then an ordinary
+    paid job the whole way through -- no second kind of order, no branch in the
+    payment path, and nothing a later report has to remember to exclude.
+
+    What it costs is honesty about the books: a top-up is a liability, and
+    spending it books revenue, so a comped amount overstates takings by exactly
+    that much and will not reconcile against Razorpay. The note is required for
+    that reason -- these entries are the reconciling line.
+    """
+
+    amount: Decimal = Field(gt=0, decimal_places=2)
+    # TOPUP is deliberately not offered. A hand-made top-up is indistinguishable
+    # from money that actually arrived through the gateway, which is the one
+    # thing this must never look like.
+    kind: Literal["adjustment", "promo"]
+    note: str = Field(min_length=1, max_length=200)
+
+    @field_validator("note")
+    @classmethod
+    def _not_only_spaces(cls, value: str) -> str:
+        # `min_length` counts characters, and a note of three spaces passes it
+        # while answering nothing. "Why is this account a hundred rupees up" is
+        # the question the entry kind exists to answer.
+        text = value.strip()
+        if not text:
+            raise ValueError("Say why this credit was made.")
+        return text
+
+
+class CreditedWalletResponse(BaseModel):
+    account_id: str
+    balance: Decimal
+    entry_id: str
 
 
 class KioskWalletRequest(BaseModel):

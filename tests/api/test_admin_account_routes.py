@@ -356,3 +356,84 @@ def test_a_student_still_cannot_reach_the_listing(client, db_session):
     response = client.get(f"{ACCOUNTS}?role=owner", headers=_auth(nosy))
 
     assert response.status_code == 403
+
+
+# -- putting money in a wallet by hand --------------------------------------
+
+
+def test_an_admin_can_credit_a_wallet(client, admin_auth, person, db_session):
+    """The way an admin prints for free: credit an account, then pay with the
+    balance like anybody else. The print is then an ordinary paid job all the
+    way through -- no second kind of order, no branch in the payment path, and
+    nothing for a later report to remember to exclude.
+    """
+    from decimal import Decimal
+
+    from app.modules.wallet import balance_of
+
+    given = client.post(
+        f"{ACCOUNTS}/{person.public_id}/wallet/credit",
+        headers=admin_auth,
+        json={"amount": "100.00", "kind": "adjustment", "note": "testing a new kiosk"},
+    )
+
+    assert given.status_code == 201, given.text
+    assert given.json()["balance"] == "100.00"
+    assert balance_of(db_session, user_id=person.id) == Decimal("100.00")
+
+
+def test_crediting_a_wallet_needs_a_reason(client, admin_auth, person):
+    """`ADJUSTMENT` exists so that "why is this account a hundred rupees up" has
+    an answer. A blank note makes the entry kind a lie."""
+    refused = client.post(
+        f"{ACCOUNTS}/{person.public_id}/wallet/credit",
+        headers=admin_auth,
+        json={"amount": "100.00", "kind": "adjustment", "note": "   "},
+    )
+
+    assert refused.status_code == 422
+
+
+def test_a_credit_is_recorded_against_the_admin_who_made_it(
+    client, admin_auth, admin, person, db_session
+):
+    """This is money appearing from nowhere. The trail is the only thing that
+    makes it different from a mistake."""
+    client.post(
+        f"{ACCOUNTS}/{person.public_id}/wallet/credit",
+        headers=admin_auth,
+        json={"amount": "50.00", "kind": "promo", "note": "sorry about the jam"},
+    )
+
+    entry = next(
+        e
+        for e in entries_for(db_session, entity_type="user", entity_id=person.public_id)
+        if e.action == "wallet.credited"
+    )
+    assert entry.actor_user_id == admin.id
+    assert entry.after["amount_inr"] == "50.00"
+    assert entry.after["note"] == "sorry about the jam"
+
+
+def test_a_credit_must_be_positive(client, admin_auth, person):
+    """Taking money out is not this route. A negative here would be a debit
+    with no funds check and no record of what it was for."""
+    refused = client.post(
+        f"{ACCOUNTS}/{person.public_id}/wallet/credit",
+        headers=admin_auth,
+        json={"amount": "-10.00", "kind": "adjustment", "note": "oops"},
+    )
+
+    assert refused.status_code in (400, 422)
+
+
+def test_only_adjustment_or_promo_may_be_credited_by_hand(client, admin_auth, person):
+    """A hand-made TOPUP would be indistinguishable from money that arrived
+    through Razorpay, which is the one thing this must never look like."""
+    refused = client.post(
+        f"{ACCOUNTS}/{person.public_id}/wallet/credit",
+        headers=admin_auth,
+        json={"amount": "10.00", "kind": "topup", "note": "sneaky"},
+    )
+
+    assert refused.status_code == 422
