@@ -215,7 +215,7 @@ class DeviceCommandRequest(BaseModel):
     service to restart and a button for it would be a placebo.
     """
 
-    command: Literal["restart_agent", "restart_printing"]
+    command: Literal["restart_agent", "restart_printing", "update_agent"]
 
 
 class DeviceCommandResponse(BaseModel):

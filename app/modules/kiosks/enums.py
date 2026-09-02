@@ -103,6 +103,10 @@ class DeviceCommandKind(StrEnum):
 
     RESTART_AGENT = "restart_agent"
     RESTART_PRINTING = "restart_printing"
+    # Fetch the current agent and restart into it. The alternative was SSHing
+    # into every shop after each release, which is how an estate ends up
+    # running four different versions and nobody can say which.
+    UPDATE_AGENT = "update_agent"
 
 
 class DeviceCommandState(StrEnum):
