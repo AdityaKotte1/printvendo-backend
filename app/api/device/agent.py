@@ -74,6 +74,7 @@ def heartbeat(
         db,
         device,
         agent_version=payload.agent_version,
+        ssh_host=payload.ssh_host,
         status=_status_from(payload.status),
     )
     kiosk = kiosk_repo.kiosk_of_device(db, device)

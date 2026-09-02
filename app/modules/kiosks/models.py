@@ -134,6 +134,14 @@ class KioskDevice(Base):
     capabilities: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
 
     agent_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # The name this machine can be reached by on the tailnet, as the machine
+    # itself reports it. Recorded rather than derived: a kiosk sits behind a
+    # shop's NAT and there is no address the server could work out on its own.
+    #
+    # An identifier, never a credential. It gets somebody as far as their own
+    # ssh client, which then has to authenticate the way it always did -- this
+    # opens no door, it just says where the door is.
+    ssh_host: Mapped[str | None] = mapped_column(String(200), nullable=True)
     agent_update_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(

@@ -338,6 +338,7 @@ def device_status(
         device_key=device.device_key,
         status=device.status.value,
         agent_version=device.agent_version,
+        ssh_host=device.ssh_host,
         last_heartbeat_at=device.last_heartbeat_at,
         online=is_online(device),
         stuck_since=device.stuck_since,

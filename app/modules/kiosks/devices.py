@@ -244,6 +244,7 @@ def record_heartbeat(
     device: KioskDevice,
     *,
     agent_version: str | None = None,
+    ssh_host: str | None = None,
     status: DeviceStatus = DeviceStatus.ONLINE,
     now: datetime | None = None,
 ) -> KioskDevice:
@@ -251,6 +252,11 @@ def record_heartbeat(
     device.status = status
     if agent_version:
         device.agent_version = agent_version
+    # Only when the machine has one. A kiosk that leaves the tailnet keeps the
+    # last name it reported, which is the more useful answer than nothing --
+    # and it is the name somebody would try first anyway.
+    if ssh_host:
+        device.ssh_host = ssh_host
     db.add(device)
     return device
 

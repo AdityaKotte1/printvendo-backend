@@ -151,6 +151,11 @@ class DeviceRegisterResponse(BaseModel):
 class DeviceHeartbeatRequest(BaseModel):
     agent_version: str | None = None
     status: str | None = None
+    # Where an operator could reach this machine, in the machine's own words.
+    # Optional and expected to be absent: a kiosk with no tailnet simply does
+    # not have one, and the console says so rather than showing a command that
+    # will not work.
+    ssh_host: str | None = None
 
 
 class DeviceHeartbeatResponse(BaseModel):
@@ -198,6 +203,7 @@ class DeviceStatusResponse(BaseModel):
     device_key: str | None
     status: str | None
     agent_version: str | None
+    ssh_host: str | None = None
     last_heartbeat_at: datetime | None
     online: bool
     # Set when the machine itself reported that it could not finish a job, and
