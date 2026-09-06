@@ -21,3 +21,10 @@ legacy-db.sql.gz
 legacy-*.dump
 legacy-*.sql.gz
 legacy-save/
+
+# Screenshots. A backend has no images of its own, so anything that lands here
+# is somebody's console capture -- and one has been committed by accident
+# already.
+*.png
+*.jpg
+*.jpeg
