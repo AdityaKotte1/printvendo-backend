@@ -228,10 +228,12 @@ def test_a_students_bearer_token_is_not_a_device_token(client, student):
 
 
 def test_a_heartbeat_answers_with_what_the_agent_needs_to_decide(
-    client, db_session, store, kiosk, student
+    client, db_session, store, kiosk, owner, student
 ):
     headers = _device_headers(db_session, kiosk)
     _queue(db_session, store, kiosk, student)
+    set_paper(db_session, kiosk, capacity=250, sheets_left=90, actor_user_id=owner.id)
+    db_session.flush()
 
     response = client.post(
         "/v1/device/heartbeat", json={"agent_version": "2.0.0"}, headers=headers
@@ -240,7 +242,15 @@ def test_a_heartbeat_answers_with_what_the_agent_needs_to_decide(
     body = response.json()
     assert body["kiosk_id"] == kiosk.public_id
     assert body["queue_depth"] == 1
-    assert body["sheets_remaining"] == 250
+    assert body["sheets_remaining"] == 90
+    # The denominator for the shop screen's paper bar. Without it the display
+    # has to guess a ream, which is how the old dashboard drew a full bar over
+    # a nearly empty tray.
+    #
+    # The tray is deliberately part-used here: with a full one the count and
+    # the capacity are the same number, and a response that swapped them would
+    # pass.
+    assert body["paper_capacity"] == 250
 
 
 def test_an_unrecognised_status_is_refused_rather_than_stored(

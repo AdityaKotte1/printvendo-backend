@@ -164,6 +164,10 @@ class DeviceHeartbeatResponse(BaseModel):
     kiosk_name: str
     queue_depth: int
     sheets_remaining: int
+    # The denominator for the shop screen's paper bar. Sent with the count
+    # rather than fetched separately, because a bar drawn against a guessed
+    # ream shows full over a nearly empty tray -- which the old dashboard did.
+    paper_capacity: int
 
 
 class DeviceTaskResponse(BaseModel):

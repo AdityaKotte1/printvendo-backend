@@ -24,6 +24,7 @@ from app.modules.kiosks import (
     record_heartbeat,
     register_device,
     sheets_remaining,
+    tray_capacity,
 )
 from app.modules.kiosks import repository as kiosk_repo
 from app.modules.printing import queue_depth
@@ -84,6 +85,7 @@ def heartbeat(
         kiosk_name=kiosk.name,
         queue_depth=queue_depth(db, kiosk_id=kiosk.id),
         sheets_remaining=sheets_remaining(db, kiosk),
+        paper_capacity=tray_capacity(db, kiosk),
     )
 
 
