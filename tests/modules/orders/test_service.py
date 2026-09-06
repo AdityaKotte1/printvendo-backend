@@ -16,6 +16,7 @@ from app.modules.kiosks.models import Kiosk, KioskPaper
 from app.modules.orders.models import ItemKind, OrderState, PaymentMethod
 from app.modules.orders.service import (
     ALREADY_PAID,
+    COLOUR_NOT_OFFERED,
     ORDER_EXPIRED,
     ORDER_LIFETIME,
     RequestedDocument,
@@ -810,3 +811,84 @@ def test_an_order_shows_as_printing_while_the_printer_works(db_session, user, ki
     refresh_order_state(db_session, document_id=task.document_id, kiosk_id=kiosk.id)
 
     assert order.state is OrderState.DISPATCHED
+
+
+# ── colour a shop cannot print ──────────────────────────────────────────────
+#
+# A mono-only machine -- the first Windows kiosk in the field runs a Kyocera
+# ECOSYS M2040dn, which is a monochrome laser. Before this, the app offered
+# colour there, priced it and took the money; the agent then refused the job,
+# because it will not send colour work to a mono pool. The student had paid for
+# something that could not happen.
+
+
+def test_a_colour_order_is_refused_where_colour_is_off(db_session, user, kiosk):
+    kiosk.offers_colour = False
+    db_session.flush()
+
+    with pytest.raises(BadRequest) as refused:
+        place_order(
+            db_session,
+            user=user,
+            kiosk=kiosk,
+            requests=[request_for(make_document(db_session, user), colour=True)],
+            method=PaymentMethod.GATEWAY,
+        )
+
+    assert refused.value.detail == COLOUR_NOT_OFFERED
+
+
+def test_black_and_white_still_prints_where_colour_is_off(db_session, user, kiosk):
+    """The switch is about colour and nothing else. A shop with colour off is
+    an ordinary working shop for every other job."""
+    kiosk.offers_colour = False
+    db_session.flush()
+
+    order = place_order(
+        db_session,
+        user=user,
+        kiosk=kiosk,
+        requests=[request_for(make_document(db_session, user), colour=False)],
+        method=PaymentMethod.GATEWAY,
+    )
+
+    assert order.state is OrderState.AWAITING_PAYMENT
+
+
+def test_a_mixed_order_is_refused_whole(db_session, user, kiosk):
+    """One colour file among black-and-white ones refuses the order rather than
+    quietly printing that file in grey. Dropping it to mono would change what
+    somebody is paying for without telling them, and they would collect a
+    greyscale photograph they had paid colour prices for."""
+    kiosk.offers_colour = False
+    db_session.flush()
+
+    with pytest.raises(BadRequest) as refused:
+        place_order(
+            db_session,
+            user=user,
+            kiosk=kiosk,
+            requests=[
+                request_for(make_document(db_session, user), colour=False),
+                request_for(make_document(db_session, user), colour=True),
+            ],
+            method=PaymentMethod.GATEWAY,
+        )
+
+    assert refused.value.detail == COLOUR_NOT_OFFERED
+
+
+def test_colour_is_offered_by_default(db_session, user, kiosk):
+    """Every kiosk that already exists keeps colour. A migration that switched
+    it off everywhere would take colour off the estate overnight."""
+    assert kiosk.offers_colour is True
+
+    order = place_order(
+        db_session,
+        user=user,
+        kiosk=kiosk,
+        requests=[request_for(make_document(db_session, user), colour=True)],
+        method=PaymentMethod.GATEWAY,
+    )
+
+    assert order.items[0].colour is True

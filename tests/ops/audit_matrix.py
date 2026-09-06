@@ -84,6 +84,7 @@ AUDIT_MATRIX: dict[tuple[str, str], tuple[str, str]] = {
     # most -- there is no settlement run in which it would otherwise surface.
     ("POST", "/v1/owner/kiosks/{kiosk_id}/orders/{order_id}/refund"): (AUDITED, ""),
     ("POST", "/v1/owner/kiosks/{kiosk_id}/status"): (AUDITED, ""),
+    ("POST", "/v1/owner/kiosks/{kiosk_id}/colour"): (AUDITED, ""),
     ("PUT", "/v1/owner/kiosks/{kiosk_id}/pricing"): (AUDITED, ""),
     ("PUT", "/v1/owner/kiosks/{kiosk_id}/paper"): (AUDITED, ""),
     ("POST", "/v1/owner/kiosks/{kiosk_id}/paper/reset"): (AUDITED, ""),

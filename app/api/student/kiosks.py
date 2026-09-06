@@ -68,6 +68,7 @@ def _as_response(
         longitude=kiosk.longitude,
         location_description=kiosk.location_description,
         accepts_wallet=kiosk.accepts_wallet,
+        offers_colour=kiosk.offers_colour,
         is_favourite=saved is not None and kiosk.id in saved,
         # Derived from the tray rather than carried as a flag, so it cannot
         # disagree with the number printed next to it.

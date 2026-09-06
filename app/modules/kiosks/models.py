@@ -72,6 +72,19 @@ class Kiosk(Base):
         Boolean, default=False, server_default="false"
     )
 
+    # Whether this shop will print in colour at all. One switch with two
+    # meanings and no reason recorded: "the machine is a mono laser" and "the
+    # colour toner ran out today" are the same thing to everybody downstream,
+    # and a second field distinguishing them would be one nobody maintains.
+    #
+    # Defaults True, unlike accepts_wallet, because it is a capability rather
+    # than a permission: a migration that switched it off would take colour off
+    # the whole estate overnight. Wrong permissively costs one refused order at
+    # one shop; wrong restrictively costs every colour sale everywhere.
+    offers_colour: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+
     location_description: Mapped[str | None] = mapped_column(String(300), nullable=True)
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)

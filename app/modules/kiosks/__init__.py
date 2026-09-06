@@ -82,6 +82,7 @@ from app.modules.kiosks.registry import (
     set_accepts_wallet,
     set_active,
     set_location,
+    set_offers_colour,
 )
 from app.modules.kiosks.scope import Scope, kiosk_scope, system_scope
 from app.modules.kiosks.staffing import (
@@ -151,6 +152,7 @@ __all__ = [
     "rename_kiosk",
     "revoke_invite",
     "set_accepts_wallet",
+    "set_offers_colour",
     "set_active",
     "set_location",
     "unassign",

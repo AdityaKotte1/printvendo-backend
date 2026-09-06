@@ -31,6 +31,7 @@ from app.api.schemas import (
     DeviceStatusResponse,
     EnrolmentCodeResponse,
     InviteStaffRequest,
+    KioskColourRequest,
     OwnerKioskResponse,
     PaperResponse,
     PaperUpdateRequest,
@@ -59,6 +60,7 @@ from app.modules.kiosks import (
     recent_commands,
     request_command,
     revoke_device,
+    set_offers_colour,
     set_pricing,
 )
 from app.modules.kiosks import repository as kiosk_repo
@@ -95,6 +97,7 @@ def _as_response(db: Session, kiosk: Kiosk) -> OwnerKioskResponse:
         is_active=kiosk.is_active,
         is_selling=is_selling(kiosk),
         accepts_wallet=kiosk.accepts_wallet,
+        offers_colour=kiosk.offers_colour,
         location_description=kiosk.location_description,
         paper=_paper_of(db, kiosk),
     )
@@ -145,6 +148,45 @@ def set_status(
         )
 
     move_to(db, kiosk, target, billing=billing)
+    return _as_response(db, kiosk)
+
+
+@router.post("/{kiosk_id}/colour", response_model=OwnerKioskResponse)
+def set_colour(
+    kiosk_id: str,
+    payload: KioskColourRequest,
+    user: CurrentUser,
+    scope: KioskScope,
+    db: Annotated[Session, Depends(get_db)],
+) -> OwnerKioskResponse:
+    """Say whether this shop prints in colour.
+
+    One route, two audiences. An owner reaches their own shops and an admin
+    reaches every shop, through the same `kiosk_scope` -- admin is a wider
+    scope, never a second router.
+
+    It is the owner's to set because the reasons are the shop's: the machine is
+    a mono laser, or the colour toner ran out this morning. Neither is something
+    to ring the Printvendo team about.
+
+    Prices are untouched. A shop that turns colour back on next week finds the
+    rates it had, rather than four boxes to retype.
+    """
+    kiosk = kiosk_repo.get_kiosk(db, scope, kiosk_id)
+    before = bool(kiosk.offers_colour)
+
+    set_offers_colour(db, kiosk, offers_colour=payload.offers_colour)
+
+    audit.record(
+        db,
+        action="kiosk.colour.changed",
+        entity_type="kiosk",
+        entity_id=kiosk.public_id,
+        actor_user_id=user.id,
+        before={"offers_colour": before},
+        after={"offers_colour": bool(kiosk.offers_colour)},
+    )
+
     return _as_response(db, kiosk)
 
 

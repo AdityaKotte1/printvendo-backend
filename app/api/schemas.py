@@ -55,6 +55,7 @@ class OwnerKioskResponse(BaseModel):
     is_active: bool
     is_selling: bool
     accepts_wallet: bool
+    offers_colour: bool
     location_description: str | None
     paper: PaperResponse
 
@@ -278,6 +279,7 @@ class StudentKioskResponse(BaseModel):
     longitude: float | None
     location_description: str | None
     accepts_wallet: bool
+    offers_colour: bool
     # Whether *this* student saved it. A property of the person asking, not of
     # the shop -- which is why it is never true for a caller who saved nothing.
     is_favourite: bool = False
@@ -594,6 +596,7 @@ class AdminKioskResponse(BaseModel):
     is_active: bool
     is_selling: bool
     accepts_wallet: bool
+    offers_colour: bool
     location_description: str | None
     # Where it is. Carried on the admin view because whoever placed a shop is
     # the only person who can tell that it was placed wrongly -- a kiosk on the
@@ -851,6 +854,18 @@ class KioskWalletRequest(BaseModel):
     """
 
     accepts_wallet: bool
+
+
+class KioskColourRequest(BaseModel):
+    """Whether this shop prints in colour.
+
+    One switch with two meanings and no reason recorded: "the machine is a mono
+    laser" and "the colour toner ran out today" are the same thing to a student
+    standing in front of it, and a second field telling them apart would be one
+    nobody maintains.
+    """
+
+    offers_colour: bool
 
 
 class InviteOwnerRequest(BaseModel):

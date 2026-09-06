@@ -204,6 +204,22 @@ def set_accepts_wallet(db: Session, kiosk: Kiosk, *, accepts_wallet: bool) -> Ki
     return kiosk
 
 
+def set_offers_colour(db: Session, kiosk: Kiosk, *, offers_colour: bool) -> Kiosk:
+    """Whether this shop prints in colour.
+
+    Refuses nothing. Unlike wallet spend there is no legality question here --
+    a shop that says it cannot print colour is stating a fact about its own
+    machine, and a shop that says it can is the ordinary case.
+
+    Prices are deliberately left alone. Colour prices stay set and stay
+    settable while colour is off, so turning it back on restores what the shop
+    had rather than making an owner retype four numbers.
+    """
+    kiosk.offers_colour = offers_colour
+    db.add(kiosk)
+    return kiosk
+
+
 def set_prices(
     db: Session,
     kiosk: Kiosk,

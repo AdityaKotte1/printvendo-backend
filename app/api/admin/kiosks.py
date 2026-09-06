@@ -91,6 +91,7 @@ def _as_response(db: Session, kiosk: Kiosk) -> AdminKioskResponse:
         is_active=kiosk.is_active,
         is_selling=is_selling(kiosk),
         accepts_wallet=kiosk.accepts_wallet,
+        offers_colour=kiosk.offers_colour,
         location_description=kiosk.location_description,
         latitude=kiosk.latitude,
         longitude=kiosk.longitude,

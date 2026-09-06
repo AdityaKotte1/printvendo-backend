@@ -140,6 +140,9 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     ("GET", "/v1/owner/kiosks"): {OWNER, ADMIN},
     ("GET", "/v1/owner/kiosks/{kiosk_id}"): {OWNER, ADMIN},
     ("POST", "/v1/owner/kiosks/{kiosk_id}/status"): {OWNER, ADMIN},
+    # Colour off is the shop's own switch: a mono laser, or toner that ran
+    # out this morning. Admin is here as a wider scope, not a second route.
+    ("POST", "/v1/owner/kiosks/{kiosk_id}/colour"): {OWNER, ADMIN},
     ("GET", "/v1/owner/kiosks/{kiosk_id}/pricing"): {OWNER, ADMIN},
     ("PUT", "/v1/owner/kiosks/{kiosk_id}/pricing"): {OWNER, ADMIN},
     ("GET", "/v1/owner/kiosks/{kiosk_id}/paper"): {OWNER, ADMIN},

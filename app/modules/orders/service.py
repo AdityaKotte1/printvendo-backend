@@ -60,6 +60,10 @@ NOT_ENOUGH_PAPER = (
     "This kiosk does not have enough paper for that job right now. "
     "Try a smaller job or another kiosk."
 )
+COLOUR_NOT_OFFERED = (
+    "This shop is not printing in colour at the moment. "
+    "Choose black and white, or pick another shop."
+)
 ALREADY_PAID = "That order has already been paid for."
 ORDER_NOT_OPEN = "That order is no longer open for payment."
 ORDER_EXPIRED = "That order expired before it was paid. Please place it again."
@@ -123,6 +127,17 @@ def place_order(
         # where the owner collects would have the platform keep the cash while
         # the owner prints for free.
         raise BadRequest(WALLET_NOT_ACCEPTED)
+
+    # A shop whose machine cannot print colour, or whose colour toner has run
+    # out. The agent already refuses colour work it has no colour printer for,
+    # so without this the student paid first and the job failed afterwards --
+    # which is the shape of defect this module exists to make unreachable.
+    #
+    # The whole order is refused rather than the colour lines being dropped to
+    # black and white: silently changing what somebody is paying for hands them
+    # a greyscale photograph they paid colour prices for.
+    if not kiosk.offers_colour and any(r.options.colour for r in requests):
+        raise BadRequest(COLOUR_NOT_OFFERED)
 
     prices = effective_prices(kiosk)
     lines = []

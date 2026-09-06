@@ -221,6 +221,7 @@ def test_the_kiosk_list_says_nothing_about_who_owns_a_shop(client, auth, kiosk):
         "longitude",
         "location_description",
         "accepts_wallet",
+        "offers_colour",
         "is_favourite",
         "is_out_of_paper",
         "sheets_remaining",
