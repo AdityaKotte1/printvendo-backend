@@ -34,6 +34,7 @@ from app.api.deps import (
     CurrentUser,
     KioskScope,
     get_db,
+    get_notifier,
     get_razorpay,
     get_refund_sink,
     get_secret_box,
@@ -45,6 +46,7 @@ from app.core.config import Settings
 from app.core.crypto import SecretBox
 from app.core.errors import NotFound
 from app.core.ids import IdPrefix, InvalidId, parse_id
+from app.core.notifier import Notifier
 from app.modules.identity.roles import Role
 from app.modules.kiosks import repository as kiosk_repo
 from app.modules.orders import Order, order_by_public_id
@@ -101,6 +103,7 @@ def refund_an_order_here(
     razorpay: Annotated[RazorpayGateway, Depends(get_razorpay)],
     box: Annotated[SecretBox, Depends(get_secret_box)],
     sink: Annotated[RefundSink, Depends(get_refund_sink)],
+    notifier: Annotated[Notifier, Depends(get_notifier)],
     settings: Annotated[Settings, Depends(get_settings_from_app)],
 ) -> RefundResponse:
     """Give back what a student paid at this shop.
@@ -132,6 +135,7 @@ def refund_an_order_here(
         sink=sink,
         platform_key_id=settings.RAZORPAY_KEY_ID,
         platform_key_secret=settings.RAZORPAY_KEY_SECRET,
+        notifier=notifier,
         own_takings_only=True,
     )
     return RefundResponse(**vars(issued))

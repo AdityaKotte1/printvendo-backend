@@ -34,6 +34,24 @@ class Notifier(Protocol):
         """Invite `email` to work at `kiosk_name`, using `token`."""
         ...
 
+    def send_refund_to_wallet(
+        self, *, email: str, amount_inr: str, balance_inr: str, order_id: str
+    ) -> None:
+        """Tell `email` that a refund is in their balance, and what it is now."""
+        ...
+
+    def send_refund_to_source(
+        self, *, email: str, amount_inr: str, order_id: str
+    ) -> None:
+        """Tell `email` that a refund is on its way back to how they paid."""
+        ...
+
+    def send_kiosk_offline(
+        self, *, email: str, kiosk_name: str, last_seen: str | None
+    ) -> None:
+        """Tell `email` that `kiosk_name` stopped answering."""
+        ...
+
 
 class LoggingNotifier:
     """Writes what would have been sent. The default until a provider lands."""
@@ -47,6 +65,24 @@ class LoggingNotifier:
     def send_staff_invite(self, *, email: str, token: str, kiosk_name: str) -> None:
         logger.info("staff invite for %s to %s -- token %s", email, kiosk_name, token)
 
+    def send_refund_to_wallet(
+        self, *, email: str, amount_inr: str, balance_inr: str, order_id: str
+    ) -> None:
+        logger.info(
+            "refund to balance for %s -- %s on %s, balance now %s",
+            email, amount_inr, order_id, balance_inr,
+        )
+
+    def send_refund_to_source(
+        self, *, email: str, amount_inr: str, order_id: str
+    ) -> None:
+        logger.info("refund to source for %s -- %s on %s", email, amount_inr, order_id)
+
+    def send_kiosk_offline(
+        self, *, email: str, kiosk_name: str, last_seen: str | None
+    ) -> None:
+        logger.info("kiosk offline to %s -- %s, last seen %s", email, kiosk_name, last_seen)
+
 
 class NullNotifier:
     """Sends nothing at all. For tests that do not care."""
@@ -58,6 +94,21 @@ class NullNotifier:
         return None
 
     def send_staff_invite(self, *, email: str, token: str, kiosk_name: str) -> None:
+        return None
+
+    def send_refund_to_wallet(
+        self, *, email: str, amount_inr: str, balance_inr: str, order_id: str
+    ) -> None:
+        return None
+
+    def send_refund_to_source(
+        self, *, email: str, amount_inr: str, order_id: str
+    ) -> None:
+        return None
+
+    def send_kiosk_offline(
+        self, *, email: str, kiosk_name: str, last_seen: str | None
+    ) -> None:
         return None
 
 
@@ -167,6 +218,87 @@ class BrevoNotifier:
                 f"<p>You have been invited to work at <b>{safe_name}</b>.</p>"
                 f'<p><a href="{link}">Accept the invitation</a></p>'
                 "<p>Nothing is shared with them until you accept.</p>"
+            ),
+        )
+
+    def send_refund_to_wallet(
+        self, *, email: str, amount_inr: str, balance_inr: str, order_id: str
+    ) -> None:
+        """Money back into a Printvendo balance.
+
+        The balance is stated because it is the question the message otherwise
+        provokes -- somebody told "₹20 has gone back" then opens the app to
+        check, and if the two disagree they write to us. Both numbers come from
+        the same ledger read, so they cannot.
+        """
+        self._send(
+            kind="refund_to_wallet",
+            email=email,
+            subject=f"₹{amount_inr} is back in your Printvendo balance",
+            body=(
+                f"<p>We have put <b>₹{amount_inr}</b> back into your Printvendo "
+                "balance.</p>"
+                f"<p>Your balance is now <b>₹{balance_inr}</b>.</p>"
+                f"<p>This was for order {order_id}.</p>"
+                "<p>You can spend it on your next print. Nothing else is "
+                "needed from you.</p>"
+            ),
+        )
+
+    def send_refund_to_source(
+        self, *, email: str, amount_inr: str, order_id: str
+    ) -> None:
+        """Money back the way it came.
+
+        Deliberately says "we have sent it" rather than "you have it": the
+        refund leaves Razorpay immediately and arrives when the card network or
+        the bank decides. Promising it instantly is how somebody comes to write
+        in on day one of a two-day wait.
+        """
+        self._send(
+            kind="refund_to_source",
+            email=email,
+            subject=f"Your refund of ₹{amount_inr} is on its way",
+            body=(
+                f"<p>We have refunded <b>₹{amount_inr}</b> for order "
+                f"{order_id}.</p>"
+                "<p>It goes back to whatever you paid with, and will show on "
+                "your bank or card statement.</p>"
+                "<p>Some banks show it straight away. If it is not there yet, "
+                "it usually arrives within <b>1 to 2 working days</b>.</p>"
+                "<p>You do not need to do anything.</p>"
+            ),
+        )
+
+    def send_kiosk_offline(
+        self, *, email: str, kiosk_name: str, last_seen: str | None
+    ) -> None:
+        """A shop stopped answering.
+
+        The name is escaped for the same reason a staff invite's is: an owner
+        typed it, and this message goes to people who have every reason to
+        trust our sending domain.
+        """
+        safe_name = html.escape(kiosk_name)
+        when = (
+            f"<p>It was last heard from at <b>{html.escape(last_seen)}</b>.</p>"
+            if last_seen
+            else "<p>It has not been heard from at all.</p>"
+        )
+        self._send(
+            kind="kiosk_offline",
+            email=email,
+            # Named in the subject: an operator with several shops needs to
+            # know which one from the notification, not after opening it.
+            subject=f"{kiosk_name} is offline",
+            body=(
+                f"<p><b>{safe_name}</b> has stopped answering, so students are "
+                "not being offered it and nothing can print there.</p>"
+                + when
+                + "<p>Usual causes: the machine is switched off, the shop's "
+                "internet is down, or the agent has stopped.</p>"
+                "<p>You will not get another email about this shop until it "
+                "comes back and goes offline again.</p>"
             ),
         )
 

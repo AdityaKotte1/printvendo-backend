@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import (
     get_db,
+    get_notifier,
     get_razorpay,
     get_refund_sink,
     get_secret_box,
@@ -44,6 +45,7 @@ from app.core.config import Settings
 from app.core.crypto import SecretBox
 from app.core.errors import NotFound
 from app.core.ids import IdPrefix, InvalidId, parse_id
+from app.core.notifier import Notifier
 from app.modules.identity import User
 from app.modules.identity import repository as identity_repo
 from app.modules.identity.roles import Role
@@ -88,6 +90,7 @@ def refund_any_order(
     razorpay: Annotated[RazorpayGateway, Depends(get_razorpay)],
     box: Annotated[SecretBox, Depends(get_secret_box)],
     sink: Annotated[RefundSink, Depends(get_refund_sink)],
+    notifier: Annotated[Notifier, Depends(get_notifier)],
     settings: Annotated[Settings, Depends(get_settings_from_app)],
 ) -> RefundResponse:
     """Give back what was paid for an order, in full or in part.
@@ -116,6 +119,7 @@ def refund_any_order(
         sink=sink,
         platform_key_id=settings.RAZORPAY_KEY_ID,
         platform_key_secret=settings.RAZORPAY_KEY_SECRET,
+        notifier=notifier,
     )
     return RefundResponse(**vars(issued))
 

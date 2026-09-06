@@ -40,9 +40,16 @@ def raise_alert(
 ) -> AdminAlert:
     """Report a condition, creating the alert or bumping the open one.
 
-    Returns the row either way, so a caller cannot tell -- and does not need to
-    -- whether this was the first occurrence. Nothing about the reporting site
-    should depend on that.
+    Returns the row either way, so the reporting site does not have to branch:
+    a sweep raises the same call whether this is the first time or the
+    hundredth, which is what keeps the detectors simple.
+
+    A caller that must act **only on the first occurrence** reads
+    `alert.occurrences`, which is 1 on a newly created row. The offline watcher
+    does, because it sends an email: a shop that goes down overnight is swept
+    every five minutes, and sending on each pass would put a hundred identical
+    messages in an owner's inbox by morning -- the wall of unread notifications
+    this table exists to avoid, reached by a different road.
     """
     now = now or datetime.now(UTC)
 

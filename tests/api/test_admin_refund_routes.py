@@ -337,3 +337,71 @@ def test_a_guest_cannot_be_refunded_to_a_balance_they_cannot_spend(
 
     assert refused.status_code == 409, refused.text
     assert "guest" in refused.json()["detail"].lower()
+
+
+# ── telling the student ─────────────────────────────────────────────────────
+
+
+class _Sent:
+    """A notifier that remembers which message it was asked for."""
+
+    def __init__(self) -> None:
+        self.wallet: list[dict] = []
+        self.source: list[dict] = []
+
+    def send_refund_to_wallet(self, *, email, amount_inr, balance_inr, order_id):
+        self.wallet.append(
+            {
+                "email": email,
+                "amount": amount_inr,
+                "balance": balance_inr,
+                "order": order_id,
+            }
+        )
+
+    def send_refund_to_source(self, *, email, amount_inr, order_id):
+        self.source.append(
+            {"email": email, "amount": amount_inr, "order": order_id}
+        )
+
+
+@pytest.fixture
+def sent(client) -> _Sent:
+    box = _Sent()
+    client.app.dependency_overrides[get_notifier] = lambda: box
+    return box
+
+
+def test_a_balance_refund_says_so_and_states_the_new_balance(
+    client, admin_auth, db_session, student, paid_order, sent
+):
+    """The balance is in the message because it is the question the message
+    otherwise provokes. Both numbers come from the same ledger read, in the
+    same transaction, so what the email says is what the app will show."""
+    _refund(client, admin_auth, paid_order, reason="Printer jammed")
+
+    assert sent.source == []
+    assert len(sent.wallet) == 1
+    assert sent.wallet[0]["email"] == student.email
+    assert sent.wallet[0]["amount"] == "20.00"
+    assert sent.wallet[0]["balance"] == str(balance_of(db_session, user_id=student.id))
+    assert sent.wallet[0]["order"] == paid_order.public_id
+
+
+def test_refunding_twice_with_one_key_writes_one_email(
+    client, admin_auth, paid_order, sent
+):
+    """A request that timed out is retried with the same key and gets back the
+    refund it already made -- so the second call must not send a second
+    message. Two emails saying "₹20 is on its way" reads as ₹40, and the
+    student writes in about the one that never arrives.
+
+    Gated on the same `already_done` the audit entry is, for the same reason.
+    """
+    first = _refund(client, admin_auth, paid_order)
+    second = _refund(client, admin_auth, paid_order)
+
+    assert first.status_code == 201
+    assert second.status_code in (200, 201)
+    assert first.json()["id"] == second.json()["id"]
+    assert len(sent.wallet) == 1

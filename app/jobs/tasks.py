@@ -22,6 +22,8 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.modules.identity import repository as identity_repo
+from app.modules.identity.roles import Role
 from app.modules.kiosks import (
     HEARTBEAT_WINDOW,
     Kiosk,
@@ -35,6 +37,7 @@ from app.modules.kiosks import repository as kiosk_repo
 from app.modules.ops import AlertSeverity, raise_alert, resolve_by_key
 from app.modules.orders import expire_stale_orders
 from app.modules.printing import DocumentStore, purge_expired_files
+from app.notifying import notifier_for
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +88,7 @@ def watch_offline_kiosks(db: Session, settings: Settings) -> str:
             continue
 
         offline += 1
-        raise_alert(
+        alert = raise_alert(
             db,
             kind="kiosk.offline",
             severity=_offline_severity(device, now),
@@ -97,7 +100,63 @@ def watch_offline_kiosks(db: Session, settings: Settings) -> str:
             now=now,
         )
 
+        # Only when the alert is new. A shop that goes down at closing time is
+        # swept every five minutes until somebody opens up, and one email per
+        # sweep is a hundred by morning -- so the row's own occurrence count is
+        # what decides, not a second table of who has been told what.
+        if alert.occurrences == 1:
+            _tell_them_it_is_offline(db, settings, kiosk=kiosk, device=device)
+
     return f"{offline} kiosks are offline" if offline else ""
+
+
+def _tell_them_it_is_offline(
+    db: Session, settings: Settings, *, kiosk: Kiosk, device
+) -> None:
+    """Write to the owner of the shop, and to every admin.
+
+    The owner because it is their takings stopping, and the admins because a
+    shop nobody owns yet still has to be somebody's problem. Both, rather than
+    one or the other: an owner on a bus and an operator at a desk are not
+    interchangeable at four in the afternoon.
+
+    Never raises. A watcher that fell over on a bad address would stop
+    reporting every shop after it in the sweep, and the alert -- which is the
+    durable record -- has already been written by the time this runs.
+    """
+    owner = kiosk_repo.owner_of(db, kiosk)
+    admins = identity_repo.holders_of(db, Role.ADMIN)
+
+    # An admin who also owns the shop is one person. dict.fromkeys keeps the
+    # order and drops the duplicate.
+    addresses = list(
+        dict.fromkeys(
+            person.email
+            for person in ([owner] if owner is not None else []) + list(admins)
+            # `holders_of` includes deactivated accounts, deliberately -- that
+            # is right for a list an operator is searching and wrong for a
+            # mailing. Somebody who has been switched off should stop hearing
+            # about the estate.
+            if person is not None and person.email and person.is_active
+        )
+    )
+    if not addresses:
+        return
+
+    last_seen = (
+        device.last_heartbeat_at.strftime("%d %b %Y, %H:%M UTC")
+        if device is not None and device.last_heartbeat_at is not None
+        else None
+    )
+
+    try:
+        notifier = notifier_for(settings, db)
+        for address in addresses:
+            notifier.send_kiosk_offline(
+                email=address, kiosk_name=kiosk.name, last_seen=last_seen
+            )
+    except Exception:  # noqa: BLE001 - the alert is already written
+        logger.exception("could not send the offline email for %s", kiosk.public_id)
 
 
 def watch_paper(db: Session, settings: Settings) -> str:

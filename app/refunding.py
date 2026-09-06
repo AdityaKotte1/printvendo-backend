@@ -23,6 +23,7 @@ rather than restating it. What is decided here is only the *default*: back the
 way it came, which is right in every case and is what an operator would type.
 """
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -31,6 +32,7 @@ from sqlalchemy.orm import Session
 
 from app.core.crypto import SecretBox
 from app.core.errors import Conflict, NotFound
+from app.core.notifier import Notifier
 from app.modules.identity import User
 from app.modules.ops import audit
 from app.modules.orders import Order
@@ -45,6 +47,9 @@ from app.modules.payments import (
     refund,
     refund_for_key,
 )
+from app.modules.wallet import balance_of
+
+logger = logging.getLogger(__name__)
 
 NOTHING_PAID = "Nothing has been paid for that order, so there is nothing to give back."
 
@@ -108,6 +113,7 @@ def refund_an_order(
     sink: RefundSink,
     platform_key_id: str,
     platform_key_secret: str,
+    notifier: Notifier,
     own_takings_only: bool = False,
 ) -> IssuedRefund:
     """Give back what was paid for this order, in full or in part.
@@ -200,6 +206,14 @@ def refund_an_order(
     # owners are paid directly, so there is no settlement run in which the
     # discrepancy would surface.
     if not already_done:
+        _tell_them(
+            db,
+            notifier=notifier,
+            order=order,
+            amount_inr=issued.amount_inr,
+            destination=where,
+        )
+
         audit.record(
             db,
             action="payment.refunded",
@@ -224,3 +238,54 @@ def refund_an_order(
         refunded_total_inr=payment.refunded_inr,
         created_at=issued.created_at,
     )
+
+
+def _tell_them(
+    db: Session,
+    *,
+    notifier: Notifier,
+    order: Order,
+    amount_inr: Decimal,
+    destination: RefundDestination,
+) -> None:
+    """Say the money is coming back, and which way.
+
+    Called from inside the `already_done` guard, for exactly the reason the
+    audit entry is: `refund` returns the existing row on a retry, so sending
+    here unconditionally would email somebody twice about one refund. Two
+    messages saying "₹20 is on its way" reads as ₹40.
+
+    Two different sentences because they are two different facts. Balance is
+    already spendable and the figure is checkable in the app, so it states the
+    new balance. Money going back to a card has *left* -- when it lands is the
+    bank's decision, not ours, and promising it instantly is how somebody comes
+    to write in on day one of a two-day wait.
+
+    Never raises. A refund that happened must not be undone because an email
+    did not; `BrevoNotifier` already swallows its own failures and reports them
+    as an alert, and this guards the lookup around it for the same reason.
+    """
+    payer = db.get(User, order.user_id)
+    if payer is None or not payer.email:
+        # A guest has no address to write to. The money still moved, and the
+        # app still shows it.
+        return
+
+    try:
+        if destination is RefundDestination.WALLET:
+            notifier.send_refund_to_wallet(
+                email=payer.email,
+                amount_inr=str(amount_inr),
+                # Read after the credit, in the same transaction, so the figure
+                # in the email is the figure the app will show.
+                balance_inr=str(balance_of(db, user_id=payer.id)),
+                order_id=order.public_id,
+            )
+        else:
+            notifier.send_refund_to_source(
+                email=payer.email,
+                amount_inr=str(amount_inr),
+                order_id=order.public_id,
+            )
+    except Exception:  # noqa: BLE001 - the money has already moved
+        logger.exception("could not send the refund email for %s", order.public_id)

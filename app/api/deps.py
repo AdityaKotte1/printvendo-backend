@@ -18,7 +18,7 @@ from app.core.config import Settings
 from app.core.crypto import SecretBox
 from app.core.db import get_session_factory
 from app.core.errors import Forbidden, Unauthorized
-from app.core.notifier import BrevoNotifier, LoggingNotifier, Notifier
+from app.core.notifier import Notifier
 from app.core.security import TokenError, TokenType, decode_token
 from app.modules.billing import Subscription, activate_subscription, price_band_for
 from app.modules.identity import User
@@ -36,7 +36,6 @@ from app.modules.kiosks import (
     consume_paper,
     kiosk_scope,
 )
-from app.modules.ops import AlertSeverity, raise_alert
 from app.modules.orders import (
     apply_payment_refund,
     document_is_in_an_order,
@@ -54,6 +53,7 @@ from app.modules.payments import (
 from app.modules.payments.gate import GateBilling
 from app.modules.printing import DocumentStore, DocumentUse, TaskOutcome
 from app.modules.wallet import EntryKind, credit
+from app.notifying import notifier_for
 
 logger = logging.getLogger(__name__)
 
@@ -100,44 +100,12 @@ def get_notifier(
 ) -> Notifier:
     """How out-of-band messages leave the system.
 
-    Brevo when a key is configured, the logging one otherwise -- so a developer
-    with no key still completes a verification flow by reading the log, and
-    production does not quietly do the same thing while believing it sends mail.
-
-    A failed send raises an admin alert. `BrevoNotifier` cannot do that itself:
-    core may not import a bounded context. This is the composition root, which
-    can, and an invitation that never arrived is exactly the kind of silent
-    failure the alerts table exists for -- a shop waits for an email nobody
-    knows was lost.
+    The decision itself lives in `app.notifying`, because `app/jobs` needs the
+    same one and the two composition roots may not import each other. Copied
+    here as well, "is Brevo configured" would have had two answers that agreed
+    right up until one of them changed.
     """
-    if not settings.BREVO_API_KEY.strip():
-        return LoggingNotifier()
-
-    def report(kind: str, email: str) -> None:
-        # Deduplicated on the kind alone rather than on the address: when the
-        # provider is down every send fails, and one alert saying "email is not
-        # going out" is what an operator needs. A thousand rows naming a
-        # thousand recipients is the wall of identical notifications that made
-        # the old backend's console unreadable.
-        raise_alert(
-            db,
-            kind="email.send.failed",
-            severity=AlertSeverity.CRITICAL,
-            summary=(
-                "Email is not being delivered. Invitations and password "
-                "resets are not arriving."
-            ),
-            dedupe_key="email.send.failed",
-            detail={"last_failure": kind},
-        )
-
-    return BrevoNotifier(
-        api_key=settings.BREVO_API_KEY,
-        app_base_url=settings.APP_BASE_URL,
-        sender_email=settings.MAIL_FROM_EMAIL,
-        sender_name=settings.MAIL_FROM_NAME,
-        on_failure=report,
-    )
+    return notifier_for(settings, db)
 
 
 def _bearer_token(request: Request) -> str:

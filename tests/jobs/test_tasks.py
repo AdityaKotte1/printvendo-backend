@@ -283,3 +283,114 @@ def test_paper_is_only_watched_where_something_is_selling(db_session, settings):
     tasks.watch_paper(db_session, settings)
 
     assert open_alerts(db_session) == []
+
+
+# ── telling somebody, once ──────────────────────────────────────────────────
+
+
+class _Sent:
+    """A notifier that remembers, and nothing else."""
+
+    def __init__(self) -> None:
+        self.offline: list[dict] = []
+
+    def send_kiosk_offline(self, *, email, kiosk_name, last_seen):
+        self.offline.append(
+            {"email": email, "kiosk": kiosk_name, "last_seen": last_seen}
+        )
+
+
+@pytest.fixture
+def sent(monkeypatch) -> _Sent:
+    """Replaces the factory, not the adapter: the sweep builds its own notifier
+    because the scheduler hands it only a session and settings."""
+    box = _Sent()
+    monkeypatch.setattr(tasks, "notifier_for", lambda settings, db: box)
+    return box
+
+
+def _admin(db_session, email: str, *, active: bool = True) -> User:
+    from app.modules.identity import repository as identity_repo
+    from app.modules.identity.roles import Role
+
+    person = User(email=email, hashed_password="x", is_active=active)
+    db_session.add(person)
+    db_session.flush()
+    identity_repo.grant_role(db_session, person.id, Role.ADMIN)
+    db_session.flush()
+    return person
+
+
+def test_a_shop_going_dark_writes_to_the_admins(db_session, settings, sent):
+    kiosk = _kiosk(db_session)
+    _device(db_session, kiosk, last_seen=NOW - timedelta(minutes=20))
+    _admin(db_session, "operator@example.com")
+
+    tasks.watch_offline_kiosks(db_session, settings)
+
+    assert [m["email"] for m in sent.offline] == ["operator@example.com"]
+    assert sent.offline[0]["kiosk"] == kiosk.name
+
+
+def test_a_shop_still_dark_is_not_reported_again(db_session, settings, sent):
+    """The sweep runs every five minutes. A shop that goes down at closing time
+    would otherwise put a hundred identical emails in an inbox by morning --
+    which is the wall of unread notifications the alerts table exists to avoid,
+    reached by a different road."""
+    kiosk = _kiosk(db_session)
+    _device(db_session, kiosk, last_seen=NOW - timedelta(minutes=20))
+    _admin(db_session, "operator@example.com")
+
+    tasks.watch_offline_kiosks(db_session, settings)
+    tasks.watch_offline_kiosks(db_session, settings)
+    tasks.watch_offline_kiosks(db_session, settings)
+
+    assert len(sent.offline) == 1
+
+
+def test_a_shop_that_comes_back_and_goes_again_is_reported_again(
+    db_session, settings, sent
+):
+    """The alert stands down when it comes back, so the next failure is a new
+    row -- and a new row is a new email. An operator who fixed it at noon has
+    to hear about it breaking again at four."""
+    kiosk = _kiosk(db_session)
+    device = _device(db_session, kiosk, last_seen=NOW - timedelta(minutes=20))
+    _admin(db_session, "operator@example.com")
+
+    tasks.watch_offline_kiosks(db_session, settings)
+
+    device.last_heartbeat_at = datetime.now(UTC)
+    db_session.flush()
+    tasks.watch_offline_kiosks(db_session, settings)
+
+    device.last_heartbeat_at = NOW - timedelta(minutes=20)
+    db_session.flush()
+    tasks.watch_offline_kiosks(db_session, settings)
+
+    assert len(sent.offline) == 2
+
+
+def test_a_working_shop_writes_to_nobody(db_session, settings, sent):
+    kiosk = _kiosk(db_session)
+    _device(db_session, kiosk, last_seen=NOW - timedelta(seconds=30))
+    _admin(db_session, "operator@example.com")
+
+    tasks.watch_offline_kiosks(db_session, settings)
+
+    assert sent.offline == []
+
+
+def test_a_switched_off_admin_is_not_written_to(db_session, settings, sent):
+    """`holders_of` includes deactivated accounts on purpose -- switching
+    somebody off is exactly when an operator needs to find them. That is right
+    for a list on screen and wrong for a mailing: somebody who has been removed
+    should stop hearing about the estate."""
+    kiosk = _kiosk(db_session)
+    _device(db_session, kiosk, last_seen=NOW - timedelta(minutes=20))
+    _admin(db_session, "gone@example.com", active=False)
+    _admin(db_session, "here@example.com")
+
+    tasks.watch_offline_kiosks(db_session, settings)
+
+    assert [m["email"] for m in sent.offline] == ["here@example.com"]
