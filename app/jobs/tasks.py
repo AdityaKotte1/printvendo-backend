@@ -36,7 +36,12 @@ from app.modules.kiosks import (
 from app.modules.kiosks import repository as kiosk_repo
 from app.modules.ops import AlertSeverity, raise_alert, resolve_by_key
 from app.modules.orders import expire_stale_orders
-from app.modules.printing import DocumentStore, purge_expired_files
+from app.modules.printing import (
+    DocumentStore,
+    TaskState,
+    purge_expired_files,
+    requeue_expired,
+)
 from app.notifying import notifier_for
 
 logger = logging.getLogger(__name__)
@@ -67,6 +72,40 @@ def purge_files(db: Session, settings: Settings) -> str:
         older_than=timedelta(days=settings.FILE_RETENTION_DAYS),
     )
     return f"purged the files of {len(purged)} documents" if purged else ""
+
+
+def recover_lost_tasks(db: Session, settings: Settings) -> str:
+    """Give back work a device took and never reported on.
+
+    `requeue_expired` was written with `claims.py`, documented there as the
+    crash-recovery half of claiming, exported from the module -- and called by
+    nothing. So an agent that died mid-job stranded that task in
+    SENT_TO_DEVICE for ever: the claim takes only QUEUED rows, so no device
+    could see it again, no report ever arrived, and `refresh_order_state` --
+    which runs on a report -- never ran. The order sat at PAID permanently and
+    no surface said why.
+
+    One shop manufactured several of these in an afternoon of restarts, and the
+    only way out was an UPDATE typed by hand.
+
+    Every minute, because the thing being given back is a print somebody has
+    already paid for and is standing at a counter waiting for. The lease is
+    fifteen minutes and is renewed on every progress report, so a job genuinely
+    on a printer is never touched -- only silence expires a lease.
+    """
+    lost = requeue_expired(db)
+    if not lost:
+        return ""
+
+    requeued = [task for task in lost if task.state is TaskState.QUEUED]
+    failed = len(lost) - len(requeued)
+
+    said = []
+    if requeued:
+        said.append(f"{len(requeued)} print tasks went back in the queue")
+    if failed:
+        said.append(f"{failed} were failed after too many attempts")
+    return "; ".join(said)
 
 
 def watch_offline_kiosks(db: Session, settings: Settings) -> str:

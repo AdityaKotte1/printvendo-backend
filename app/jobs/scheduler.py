@@ -72,6 +72,15 @@ JOBS: tuple[Job, ...] = (
         lock_key=8_100_002,
         run=tasks.purge_files,
     ),
+    # Every minute. What is being given back is a print somebody has paid for
+    # and is standing at a counter waiting for, and the lease is already
+    # fifteen minutes long -- there is no reason to add to the wait.
+    Job(
+        name="recover-lost-tasks",
+        interval=timedelta(minutes=1),
+        lock_key=8_100_005,
+        run=tasks.recover_lost_tasks,
+    ),
     # A device heartbeats far more often than the five-minute window that makes
     # it late, so this only has to be frequent enough that an operator hears
     # about a dead shop while the shop is still open.

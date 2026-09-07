@@ -394,3 +394,110 @@ def test_a_switched_off_admin_is_not_written_to(db_session, settings, sent):
     tasks.watch_offline_kiosks(db_session, settings)
 
     assert [m["email"] for m in sent.offline] == ["here@example.com"]
+
+
+# ── work a dead device left holding ─────────────────────────────────────────
+
+
+def _claimed_task(db_session, kiosk, user, *, lease_ends):
+    """A task some device took and never reported on."""
+    from app.modules.printing.models import PrintTask, TaskState
+
+    document = Document(
+        user_id=user.id,
+        original_filename="stranded.pdf",
+        page_count=2,
+        original_path="originals/2026/09/stranded.pdf",
+        state=DocumentState.READY,
+    )
+    db_session.add(document)
+    db_session.flush()
+
+    task = PrintTask(
+        document_id=document.id,
+        kiosk_id=kiosk.id,
+        state=TaskState.SENT_TO_DEVICE,
+        predicted_sheets=2,
+        claimed_at=lease_ends - timedelta(minutes=15),
+        lease_expires_at=lease_ends,
+        attempts=1,
+    )
+    db_session.add(task)
+    db_session.flush()
+    return task
+
+
+def test_a_job_a_dead_agent_was_holding_goes_back_in_the_queue(
+    db_session, settings, user
+):
+    """`requeue_expired` was written, documented as the crash-recovery
+    mechanism, exported -- and called by nothing. So an agent that died mid-job
+    stranded that task in SENT_TO_DEVICE for ever: the claim only takes QUEUED,
+    so no device could ever see it again, no report ever arrived, and the order
+    sat at PAID permanently with nothing on any surface saying why.
+
+    It happened repeatedly at one shop in an afternoon of restarts.
+    """
+    from app.modules.printing.models import TaskState
+
+    kiosk = _kiosk(db_session)
+    task = _claimed_task(db_session, kiosk, user, lease_ends=NOW - timedelta(minutes=1))
+
+    tasks.recover_lost_tasks(db_session, settings)
+    # Flushed before reading back: the sweep leaves the change pending for the
+    # scheduler's own commit, and a bare refresh would re-read the row and
+    # discard it -- proving nothing except that refresh works.
+    db_session.flush()
+    db_session.refresh(task)
+
+    assert task.state is TaskState.QUEUED
+    assert task.claimed_at is None
+    assert task.lease_expires_at is None
+
+
+def test_a_job_a_device_is_still_printing_is_left_alone(db_session, settings, user):
+    """The lease is renewed on every progress report, so a live job always has
+    one in the future. Requeueing it would hand the same job to a second
+    device and print it twice."""
+    from app.modules.printing.models import TaskState
+
+    kiosk = _kiosk(db_session)
+    task = _claimed_task(db_session, kiosk, user, lease_ends=NOW + timedelta(minutes=10))
+
+    tasks.recover_lost_tasks(db_session, settings)
+    # Flushed before reading back: the sweep leaves the change pending for the
+    # scheduler's own commit, and a bare refresh would re-read the row and
+    # discard it -- proving nothing except that refresh works.
+    db_session.flush()
+    db_session.refresh(task)
+
+    assert task.state is TaskState.SENT_TO_DEVICE
+
+
+def test_a_job_that_has_defeated_three_devices_is_failed_rather_than_retried(
+    db_session, settings, user
+):
+    """A document that crashes the printer would otherwise be handed out for
+    ever and block everything behind it."""
+    from app.modules.printing.models import TaskState
+
+    kiosk = _kiosk(db_session)
+    task = _claimed_task(db_session, kiosk, user, lease_ends=NOW - timedelta(minutes=1))
+    task.attempts = 3
+    db_session.flush()
+
+    tasks.recover_lost_tasks(db_session, settings)
+    # Flushed before reading back: the sweep leaves the change pending for the
+    # scheduler's own commit, and a bare refresh would re-read the row and
+    # discard it -- proving nothing except that refresh works.
+    db_session.flush()
+    db_session.refresh(task)
+
+    assert task.state is TaskState.FAILED
+    assert task.error_code == "LEASE_EXPIRED"
+
+
+def test_a_recovery_sweep_with_nothing_lost_says_nothing(db_session, settings):
+    """It runs every minute and almost every run finds nothing. A sentence per
+    tick would bury the ones that matter."""
+    assert tasks.recover_lost_tasks(db_session, settings) == ""

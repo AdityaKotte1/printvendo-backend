@@ -165,3 +165,47 @@ def test_a_failing_job_releases_its_lock(settings):
     with get_engine(settings.DATABASE_URL).connect() as connection:
         with advisory_lock(connection, 511) as acquired:
             assert acquired is True
+
+
+# ── a sweep nothing runs is the defect ──────────────────────────────────────
+
+
+def test_every_sweep_in_tasks_is_actually_scheduled():
+    """The whole point, and the reason this test exists at all.
+
+    `requeue_expired` was written, documented as the crash-recovery half of
+    claiming, exported from its module -- and called by nothing. Every test
+    around it passed, because they all called it directly. An agent that died
+    mid-job therefore stranded a paid print for ever, and no test, contract or
+    surface said so.
+
+    Writing `recover_lost_tasks` reproduced the same mistake within the hour:
+    deleting its entry from JOBS broke no test.
+
+    So the rule is mechanical rather than remembered. Every function in
+    `app.jobs.tasks` with a sweep's shape -- `(Session, Settings) -> str` --
+    must be the `run` of some Job. Adding one and not scheduling it fails the
+    build, which is the only thing that would have caught the original.
+    """
+    import inspect
+
+    from app.jobs import tasks
+
+    scheduled = {job.run for job in JOBS}
+
+    sweeps = []
+    for name, function in vars(tasks).items():
+        if name.startswith("_") or not inspect.isfunction(function):
+            continue
+        if function.__module__ != tasks.__name__:
+            continue
+        parameters = list(inspect.signature(function).parameters)
+        if parameters[:2] == ["db", "settings"]:
+            sweeps.append((name, function))
+
+    assert sweeps, "found no sweeps at all, so this test is checking nothing"
+
+    unscheduled = [name for name, function in sweeps if function not in scheduled]
+    assert not unscheduled, (
+        "these sweeps exist and nothing runs them: " + ", ".join(sorted(unscheduled))
+    )
