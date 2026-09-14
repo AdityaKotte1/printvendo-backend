@@ -16,6 +16,9 @@ This route is one of **two doors onto `app.refunding`**; the other is the
 owner's, at their own shop. The difference between them is which orders are
 reachable and nothing else. The old backend wrote the refund twice instead, and
 the two copies disagreed about whose Razorpay account collects.
+
+The other way an operator resolves "my print did not come out" lives here too:
+it did, after the jam was cleared, and the order should stop saying otherwise.
 """
 
 from typing import Annotated
@@ -24,6 +27,8 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
+    KioskPaperLedger,
+    KioskScope,
     get_db,
     get_notifier,
     get_razorpay,
@@ -33,8 +38,9 @@ from app.api.deps import (
     require_role,
 )
 from app.api.schemas import (
+    AdminOrderItemResponse,
     AdminOrderResponse,
-    OrderItemResponse,
+    ConfirmPrintedRequest,
     OrderPaymentResponse,
     OrderRefundResponse,
     OrderStudentResponse,
@@ -49,7 +55,15 @@ from app.core.notifier import Notifier
 from app.modules.identity import User
 from app.modules.identity import repository as identity_repo
 from app.modules.identity.roles import Role
-from app.modules.orders import Order, order_by_public_id, view_of
+from app.modules.kiosks import repository as kiosk_repo
+from app.modules.ops import audit
+from app.modules.orders import (
+    Order,
+    confirm_order_printed,
+    order_by_public_id,
+    print_states_of,
+    view_of,
+)
 from app.modules.payments import (
     RazorpayGateway,
     RefundSink,
@@ -124,6 +138,58 @@ def refund_any_order(
     return RefundResponse(**vars(issued))
 
 
+@router.post("/{order_id}/confirm-printed", response_model=AdminOrderResponse)
+def confirm_an_order_printed(
+    order_id: str,
+    body: ConfirmPrintedRequest,
+    admin: CurrentAdmin,
+    scope: KioskScope,
+    db: Annotated[Session, Depends(get_db)],
+) -> AdminOrderResponse:
+    """Say a partly failed order's failed prints came out after all.
+
+    For the jam that was cleared and the student who left with their pages
+    while every screen still said failed. `orders.confirm_order_printed` turns
+    the failed prints into printed ones and the order re-derives, so the
+    student's app, the owner's and this console change together -- they read
+    one fact. The paper comes off the tray of the kiosk the order was placed
+    at, through the same ledger a device's own report uses.
+
+    Refused with a sentence unless the order partly failed, if any money has
+    gone back on it, or if nothing on it failed.
+
+    One audit entry, carrying what the device had reported. The confirm clears
+    that from the task, so this entry is the only place it survives.
+    """
+    order = _order(db, order_id)
+    kiosk = kiosk_repo.get_kiosk(db, scope, view_of(db, order).kiosk_id)
+
+    before = order.state.value
+    confirmed = confirm_order_printed(db, order, KioskPaperLedger(kiosk))
+
+    audit.record(
+        db,
+        action="order.confirmed_printed",
+        entity_type="order",
+        entity_id=order.public_id,
+        actor_user_id=admin.id,
+        before={
+            "state": before,
+            "prints": [
+                {
+                    "task_id": print_.task_id,
+                    "error_code": print_.error_code,
+                    "error_message": print_.error_message,
+                }
+                for print_ in confirmed
+            ],
+        },
+        after={"state": order.state.value},
+        note=body.note,
+    )
+    return _admin_view(db, order)
+
+
 NO_SUCH_STUDENT = "That order names an account that no longer exists."
 
 
@@ -147,7 +213,10 @@ def read_an_order(
     charged twice and nothing came out" needs all three in one place, and the
     order row alone cannot tell them whether a partial refund has been made.
     """
-    order = _order(db, order_id)
+    return _admin_view(db, _order(db, order_id))
+
+
+def _admin_view(db: Session, order: Order) -> AdminOrderResponse:
     view = view_of(db, order)
 
     student = identity_repo.actors_by_id(db, {order.user_id}).get(order.user_id)
@@ -177,7 +246,7 @@ def read_an_order(
             full_name=student.full_name,
         ),
         items=[
-            OrderItemResponse(
+            AdminOrderItemResponse(
                 document_id=item.document_id,
                 filename=item.filename,
                 kind=item.kind,
@@ -188,8 +257,13 @@ def read_an_order(
                 page_count=item.page_count,
                 sheets=item.sheets,
                 amount_inr=item.amount_inr,
+                # How the line printed, so "partly failed" can be read line by
+                # line before somebody refunds -- or confirms -- the whole thing.
+                print_state=print_state,
             )
-            for item in view.items
+            for item, print_state in zip(
+                view.items, print_states_of(db, order), strict=True
+            )
         ],
         payment=None
         if payment is None

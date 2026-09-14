@@ -30,6 +30,7 @@ from app.modules.orders.refunds import apply_payment_refund
 from app.modules.orders.service import (
     ORDER_LIFETIME,
     RequestedDocument,
+    confirm_order_printed,
     expire_stale_orders,
     mark_paid,
     pay_with_wallet,
@@ -47,6 +48,7 @@ from app.modules.orders.views import (
     orders_at_kiosks,
     orders_of,
     paid_orders_at_kiosks,
+    print_states_of,
     view_of,
 )
 
@@ -66,6 +68,7 @@ __all__ = [
     "PaymentMethod",
     "RequestedDocument",
     "apply_payment_refund",
+    "confirm_order_printed",
     "expire_stale_orders",
     "gateway_fee",
     "order_for",
@@ -74,6 +77,7 @@ __all__ = [
     "orders_at_kiosks",
     "render_invoice",
     "paid_orders_at_kiosks",
+    "print_states_of",
     "orders_of",
     "mark_paid",
     "pay_with_wallet",

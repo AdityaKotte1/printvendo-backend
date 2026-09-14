@@ -25,13 +25,19 @@ from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, get_document_store, require_role
-from app.api.schemas import ChangeRequestResponse, ReviewChangeRequest
+from app.api.schemas import (
+    ChangeRequestResponse,
+    ConfiguredOwnerResponse,
+    ReviewChangeRequest,
+)
 from app.core.errors import NotFound
 from app.modules.identity import User
 from app.modules.identity.roles import Role
 from app.modules.ops import audit
 from app.modules.payments import (
     ChangeRequestView,
+    change_request_history,
+    configured_owners,
     pending_change_requests,
     proof_key,
     review_change_by_id,
@@ -71,6 +77,7 @@ def _as_response(view: ChangeRequestView) -> ChangeRequestResponse:
         created_at=view.created_at,
         reviewed_at=view.reviewed_at,
         review_note=view.review_note,
+        reviewed_by=view.reviewed_by_email,
     )
 
 
@@ -86,6 +93,47 @@ def review_queue(
     longest.
     """
     return [_as_response(view) for view in pending_change_requests(db)]
+
+
+@router.get("/change-requests/history", response_model=list[ChangeRequestResponse])
+def change_history(
+    admin: CurrentAdmin,
+    db: Annotated[Session, Depends(get_db)],
+) -> list[ChangeRequestResponse]:
+    """Every request ever made, whatever became of it, newest first.
+
+    `/change-requests` stays the worklist -- what is waiting. This is the
+    record: who asked, who decided, and what they were shown, since each
+    request's proof stays reachable at its own `/proof` after the decision.
+    """
+    return [_as_response(view) for view in change_request_history(db)]
+
+
+@router.get("/owners", response_model=list[ConfiguredOwnerResponse])
+def configured_keys(
+    admin: CurrentAdmin,
+    db: Annotated[Session, Depends(get_db)],
+) -> list[ConfiguredOwnerResponse]:
+    """Every account collecting into its own Razorpay, the key masked.
+
+    Masked by the same function as the owner's own page, so the console cannot
+    show more of a key than its owner sees. Neither secret has a field to
+    travel in.
+    """
+    return [
+        ConfiguredOwnerResponse(
+            owner_id=view.owner_public_id,
+            owner_email=view.owner_email,
+            owner_name=view.owner_name,
+            key_id_masked=view.keys.key_id_masked,
+            configured_at=view.keys.configured_at,
+            has_webhook_secret=view.has_webhook_secret,
+            # Only configured accounts are listed, and for those `can_update`
+            # means exactly this.
+            change_approved=view.keys.can_update,
+        )
+        for view in configured_owners(db)
+    ]
 
 
 @router.get("/change-requests/{request_id}/proof")

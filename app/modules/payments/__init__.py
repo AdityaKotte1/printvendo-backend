@@ -35,7 +35,10 @@ from app.modules.payments.charges import (
 )
 from app.modules.payments.configs import (
     ChangeRequestView,
+    ConfiguredOwnerView,
     PaymentConfigView,
+    change_request_history,
+    configured_owners,
     decrypt_secret,
     decrypt_webhook_secret,
     get_config,
@@ -99,6 +102,7 @@ __all__ = [
     "SETTLED_PAYMENT_STATES",
     "ChangeRequestStatus",
     "ChangeRequestView",
+    "ConfiguredOwnerView",
     "DayEarnings",
     "Earnings",
     "Collection",
@@ -140,6 +144,8 @@ __all__ = [
     "payment_for_subscription",
     "platform_revenue",
     "pending_change_requests",
+    "change_request_history",
+    "configured_owners",
     "proof_key",
     "record_capture",
     "record_failure",

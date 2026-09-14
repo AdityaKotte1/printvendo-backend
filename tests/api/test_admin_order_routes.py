@@ -284,3 +284,116 @@ def test_the_owner_surface_still_carries_no_student(client, owner, paid_order, k
     assert STUDENT_EMAIL not in body
     assert "Ravi Kumar" not in body
     assert "Medical Results" not in body
+
+
+# ── a failed print that came out after all ─────────────────────────────────
+
+
+@pytest.fixture
+def jammed_order(db_session, paid_order, kiosk):
+    """Paid, sent, and reported failed: the tray jammed and nothing counted."""
+    from app.modules.orders import refresh_order_state
+    from app.modules.printing.models import PrintTask, TaskState
+
+    task = db_session.query(PrintTask).filter_by(kiosk_id=kiosk.id).one()
+    task.state = TaskState.FAILED
+    task.error_code = "JAM"
+    task.error_message = "tray 2 jammed"
+    db_session.flush()
+    refresh_order_state(db_session, document_id=task.document_id, kiosk_id=kiosk.id)
+    assert paid_order.state.value == "partially_failed"
+    return paid_order
+
+
+def _confirm(client, auth, order, note=None):
+    return client.post(
+        f"/v1/admin/orders/{order.public_id}/confirm-printed",
+        headers=auth,
+        json={} if note is None else {"note": note},
+    )
+
+
+def test_the_console_can_see_which_line_failed(client, an_admin, jammed_order):
+    body = _get(client, _auth(an_admin), jammed_order).json()
+
+    assert [item["print_state"] for item in body["items"]] == ["failed"]
+
+
+def test_an_operator_can_say_a_failed_print_came_out(client, an_admin, jammed_order):
+    response = _confirm(client, _auth(an_admin), jammed_order)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["state"] == "completed"
+    assert [item["print_state"] for item in body["items"]] == ["printed"]
+
+
+def test_the_student_and_the_owner_see_it_completed_too(
+    client, an_admin, student, owner, kiosk, jammed_order
+):
+    """"Everywhere" is one fact read three ways, not three writes."""
+    _confirm(client, _auth(an_admin), jammed_order)
+
+    mine = client.get(
+        f"/v1/app/orders/{jammed_order.public_id}", headers=_auth(student)
+    ).json()
+    shop = client.get(
+        f"/v1/owner/kiosks/{kiosk.public_id}/orders", headers=_auth(owner)
+    ).json()
+
+    assert mine["state"] == "completed"
+    assert [o["state"] for o in shop if o["id"] == jammed_order.public_id] == [
+        "completed"
+    ]
+
+
+def test_the_shops_tray_pays_for_the_pages(client, an_admin, db_session, kiosk, jammed_order):
+    """The failure reported no sheets, so none were taken; ten came out."""
+    paper = db_session.query(KioskPaper).filter_by(kiosk_id=kiosk.id).one()
+    before = paper.used
+
+    _confirm(client, _auth(an_admin), jammed_order)
+    db_session.refresh(paper)
+
+    assert paper.used - before == 10
+
+
+def test_it_is_written_down_with_what_the_device_had_said(
+    client, an_admin, db_session, jammed_order
+):
+    """The task's own error is cleared by the confirm. This entry is the only
+    place "tray 2 jammed" survives, beside who overruled it and why."""
+    from app.modules.ops import audit
+
+    _confirm(client, _auth(an_admin), jammed_order, note="cleared it, student collected")
+
+    [entry] = audit.entries_for(
+        db_session,
+        entity_type="order",
+        entity_id=jammed_order.public_id,
+        action="order.confirmed_printed",
+    )
+    assert entry.actor_user_id == an_admin.id
+    assert entry.note == "cleared it, student collected"
+    assert entry.before["state"] == "partially_failed"
+    assert [(p["error_code"], p["error_message"]) for p in entry.before["prints"]] == [
+        ("JAM", "tray 2 jammed")
+    ]
+    assert entry.after["state"] == "completed"
+
+
+def test_an_order_that_did_not_fail_is_refused_with_a_sentence(
+    client, an_admin, paid_order
+):
+    response = _confirm(client, _auth(an_admin), paid_order)
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "Only an order that partly failed can be marked as printed."
+    )
+
+
+def test_an_owner_cannot_confirm_even_at_their_own_shop(client, owner, jammed_order):
+    """It changes an order whose admin view carries the student's identity, and
+    the button lives on that view. The owner's shop is not the question."""
+    assert _confirm(client, _auth(owner), jammed_order).status_code == 403

@@ -6,6 +6,8 @@ from app.core.errors import BadRequest, Conflict, NotFound
 from app.core.ids import IdPrefix, parse_id
 from app.modules.identity.models import User
 from app.modules.payments.configs import (
+    change_request_history,
+    configured_owners,
     decrypt_secret,
     get_config,
     has_usable_keys,
@@ -15,6 +17,7 @@ from app.modules.payments.configs import (
     review_change,
     review_change_by_id,
     set_keys,
+    set_webhook_secret,
     view_config,
 )
 from app.modules.payments.models import ChangeRequestStatus, KioskPaymentConfig
@@ -324,3 +327,111 @@ def test_a_request_with_no_proof_has_no_key_to_serve(db_session, owner):
 
     with pytest.raises(NotFound):
         proof_key(db_session, public_id)
+
+
+# ── every configured account, for the console ──────────────────────────────
+
+
+def test_a_configured_owner_is_listed_exactly_as_they_see_themselves(
+    db_session, owner
+):
+    """One masking. The console showing more of a key than its owner sees would
+    be a second opinion about what may leave the database."""
+    set_keys(db_session, owner.id, key_id=KEY_ID, key_secret=SECRET, box=BOX)
+    db_session.flush()
+
+    [listed] = configured_owners(db_session)
+
+    assert listed.owner_public_id == owner.public_id
+    assert listed.owner_email == owner.email
+    assert listed.keys == view_config(db_session, owner.id)
+    assert KEY_ID not in repr(listed)
+    assert SECRET not in repr(listed)
+
+
+def test_an_account_with_nothing_configured_is_not_listed(db_session, owner):
+    """A list of "keys" that included accounts without any would read as shops
+    that can collect."""
+    assert configured_owners(db_session) == []
+
+
+def test_a_webhook_secret_alone_is_not_a_configured_account(db_session, owner):
+    set_webhook_secret(db_session, owner.id, webhook_secret="whsec_only", box=BOX)
+
+    assert configured_owners(db_session) == []
+
+
+def test_it_says_whether_a_webhook_secret_is_set_and_never_what_it_is(
+    db_session, owner
+):
+    set_keys(db_session, owner.id, key_id=KEY_ID, key_secret=SECRET, box=BOX)
+    set_webhook_secret(db_session, owner.id, webhook_secret="whsec_value_1", box=BOX)
+    db_session.flush()
+
+    [listed] = configured_owners(db_session)
+
+    assert listed.has_webhook_secret is True
+    assert "whsec_value_1" not in repr(listed)
+
+
+def test_an_approved_change_waiting_to_be_used_is_visible(db_session, owner, admin):
+    """The window in which an owner's keys can be replaced without anybody else
+    agreeing -- what an operator watching for a takeover needs to see."""
+    set_keys(db_session, owner.id, key_id=KEY_ID, key_secret=SECRET, box=BOX)
+    db_session.flush()
+    request = request_change(db_session, owner.id, reason="new bank", proof_path=None)
+    db_session.flush()
+    review_change(db_session, request, approve=True, reviewer_user_id=admin.id)
+    db_session.flush()
+
+    [listed] = configured_owners(db_session)
+
+    assert listed.keys.can_update is True
+
+
+# ── every request ever made, whatever became of it ─────────────────────────
+
+
+def test_the_history_keeps_decided_requests_newest_first(db_session, owner, admin):
+    """The queue answers "what is waiting". This answers "who changed where
+    this shop's money goes, and when" -- asked after takings go missing."""
+    set_keys(db_session, owner.id, key_id=KEY_ID, key_secret=SECRET, box=BOX)
+    first = request_change(db_session, owner.id, reason="first", proof_path=None)
+    db_session.flush()
+    review_change(
+        db_session, first, approve=False, reviewer_user_id=admin.id, note="mismatch"
+    )
+    request_change(db_session, owner.id, reason="second", proof_path=None)
+    db_session.flush()
+
+    history = change_request_history(db_session)
+
+    assert [(v.reason, v.status) for v in history] == [
+        ("second", ChangeRequestStatus.PENDING),
+        ("first", ChangeRequestStatus.REJECTED),
+    ]
+
+
+def test_the_history_names_who_decided(db_session, owner, admin):
+    """"Who agreed to send this shop's money somewhere else" is the question
+    the history exists for."""
+    request = request_change(db_session, owner.id, reason="r", proof_path=None)
+    db_session.flush()
+    review_change(db_session, request, approve=True, reviewer_user_id=admin.id)
+    db_session.flush()
+
+    [decided] = change_request_history(db_session)
+
+    assert decided.reviewed_by_email == admin.email
+
+
+def test_the_history_carries_no_storage_key(db_session, owner):
+    request_change(
+        db_session, owner.id, reason="r", proof_path="proofs/2026/statement.png"
+    )
+    db_session.flush()
+
+    [listed] = change_request_history(db_session)
+
+    assert listed.has_proof is True
+    assert "proofs/" not in repr(listed)

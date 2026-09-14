@@ -25,7 +25,8 @@ from sqlalchemy.orm import Session
 
 from app.modules.kiosks import Kiosk
 from app.modules.orders.models import Order, OrderItem, OrderState
-from app.modules.printing import Document
+from app.modules.printing import Document, TaskState
+from app.modules.printing.repository import document_task_states
 
 
 @dataclass(frozen=True)
@@ -252,3 +253,48 @@ def orders_of(db: Session, *, user_id: int, limit: int = 50) -> list[OrderView]:
     )
     kiosks, documents = _public_ids(db, orders)
     return [_view(o, kiosks, documents) for o in orders]
+
+
+_ON_THE_MACHINE = frozenset({TaskState.SENT_TO_DEVICE, TaskState.PRINTING})
+
+
+def _how_it_went(states: list[TaskState]) -> str | None:
+    """One word for a line's prints, worst news first.
+
+    A failure outranks everything, because it is the thing an operator opened
+    the order to find.
+    """
+    if not states:
+        return None
+    if TaskState.FAILED in states:
+        return TaskState.FAILED.value
+    if all(s is TaskState.PRINTED for s in states):
+        return TaskState.PRINTED.value
+    if any(s in _ON_THE_MACHINE for s in states):
+        return TaskState.PRINTING.value
+    for waiting in (TaskState.BLOCKED, TaskState.QUEUED, TaskState.CANCELLED):
+        if waiting in states:
+            return waiting.value
+    return None
+
+
+def print_states_of(db: Session, order: Order) -> list[str | None]:
+    """How each line of an order printed, in the order of its lines.
+
+    For the operator deciding whether a partly failed order really failed.
+    Deliberately not a field on `OrderLineView`: the student's list and the
+    owner's would pay a query per page for a column neither shows. `None` is a
+    line nothing was sent for -- an order never paid, or a line whose file was
+    purged.
+
+    Bounded to this order's prints by the same rule the order's state is
+    derived through, so this column cannot disagree with the state above it.
+    """
+    documents = [i.document_id for i in order.items if i.document_id is not None]
+    states = document_task_states(
+        db, document_ids=documents, kiosk_id=order.kiosk_id, since=order.created_at
+    )
+    return [
+        None if item.document_id is None else _how_it_went(states.get(item.document_id, []))
+        for item in order.items
+    ]

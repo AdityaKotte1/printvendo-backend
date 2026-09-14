@@ -17,6 +17,7 @@ without saying where the paper goes -- there is no default that quietly does
 nothing.
 """
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -25,6 +26,7 @@ from sqlalchemy.orm import Session
 from app.core.errors import BadRequest, Conflict
 from app.modules.printing.claims import LEASE
 from app.modules.printing.models import TERMINAL_TASK_STATES, PrintTask, TaskState
+from app.modules.printing.repository import failed_tasks_at
 
 # States a device may report from. A task it has not claimed is either a bug or
 # another kiosk's work, and either way it does not get to move it.
@@ -32,6 +34,9 @@ IN_HAND = frozenset({TaskState.SENT_TO_DEVICE, TaskState.PRINTING})
 
 ALREADY_FINISHED = "That print job has already finished."
 NOT_IN_HAND = "That print job is not currently assigned to this kiosk."
+NOT_FAILED = (
+    "Only a print that was reported as failed can be confirmed as printed."
+)
 
 
 class PaperLedger(Protocol):
@@ -150,6 +155,113 @@ def report_printed(
 
     (outcome or NoOutcome()).task_moved(db, task)
     return task
+
+
+def confirm_printed(
+    db: Session,
+    task: PrintTask,
+    ledger: PaperLedger,
+    *,
+    outcome: TaskOutcome | None = None,
+    now: datetime | None = None,
+) -> PrintTask:
+    """An operator says a job the device reported FAILED did come out after all.
+
+    It happens: somebody clears the jam, or reloads the tray, and the job the
+    agent gave up on prints. Until now the task stayed FAILED for ever, the
+    order behind it stayed Partly failed, and the only honest thing an operator
+    could do was refund a print the student had collected.
+
+    **Only from FAILED, and it is not `report_printed`.** That function refuses
+    a finished task on purpose -- a device reporting late must not resurrect
+    one -- and this is a person deciding, recorded by the route that calls it.
+    Anything else is refused: a job still on the machine would have its paper
+    taken now and again when the device reports it.
+
+    **The tray loses what the failure did not take.** `report_failed` deducted
+    only what the device reported, and nothing when it said nothing, so a job
+    that did print in full leaves the counter short by the rest. Taken here,
+    once: `consume_paper` adds whatever it is given and dedupes nothing, so the
+    task leaving FAILED is what stops a second click emptying the tray twice.
+
+    **The failure reason is cleared.** A printed job that still says "tray
+    jammed" reads as broken to whoever looks at it next. Who confirmed it, and
+    what the device had said, belong in the audit entry the route writes.
+    """
+    if task.state is not TaskState.FAILED:
+        raise Conflict(NOT_FAILED)
+    now = now or datetime.now(UTC)
+
+    already = task.actual_sheets or 0
+    rest = max(0, task.predicted_sheets - already)
+
+    task.state = TaskState.PRINTED
+    task.actual_sheets = max(already, task.predicted_sheets)
+    task.error_code = None
+    task.error_message = None
+    task.finished_at = now
+    task.lease_expires_at = None
+    db.add(task)
+
+    if rest:
+        ledger.consume(
+            db,
+            task.kiosk_id,
+            # The remainder is both the prediction and the figure: nothing is
+            # being estimated here, so the refill log should not read as a
+            # discrepancy.
+            predicted_sheets=rest,
+            actual_sheets=rest,
+            reference=f"{task.public_id} (confirmed by an operator)",
+        )
+
+    (outcome or NoOutcome()).task_moved(db, task)
+    return task
+
+
+@dataclass(frozen=True)
+class ConfirmedPrint:
+    """One print an operator said came out, and why it had been called failed.
+
+    The reason travels out because `confirm_printed` clears it from the task --
+    a print that came out should not read as broken to whoever looks next --
+    and the caller's audit entry is where it belongs from now on.
+    """
+
+    task_id: str
+    error_code: str | None
+    error_message: str | None
+
+
+def confirm_failed_prints(
+    db: Session,
+    *,
+    document_ids: list[int],
+    kiosk_id: int,
+    since: datetime,
+    ledger: PaperLedger,
+) -> list[ConfirmedPrint]:
+    """Confirm every failed print among one order's prints.
+
+    Printing owns the tasks, so orders asks for this rather than being handed
+    `PrintTask`s to flip. What counts as one order's prints is
+    `repository._one_orders`, the same bound the order's state is derived
+    through -- two definitions would let a confirm flip one set of prints while
+    the order re-derived from another.
+    """
+    confirmed: list[ConfirmedPrint] = []
+    for task in failed_tasks_at(
+        db, document_ids=document_ids, kiosk_id=kiosk_id, since=since
+    ):
+        confirmed.append(
+            ConfirmedPrint(
+                task_id=task.public_id,
+                error_code=task.error_code,
+                error_message=task.error_message,
+            )
+        )
+        confirm_printed(db, task, ledger)
+    return confirmed
 
 
 def report_failed(

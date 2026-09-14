@@ -298,3 +298,77 @@ def test_the_decision_is_audited_against_the_owner(
     reviewed = next(e for e in trail if e.action == "payment_config.change.reviewed")
     assert reviewed.actor_user_id == admin.id
     assert reviewed.after["status"] == "approved"
+
+
+# -- every configured account, and everything ever asked of them ------------
+
+OWNERS = "/v1/admin/payment-config/owners"
+HISTORY = f"{QUEUE}/history"
+
+
+def test_an_admin_sees_each_configured_owner_with_the_key_masked(
+    client, admin_auth, owner, owner_auth
+):
+    _set_keys(client, owner_auth, key_id="rzp_live_abcd1234")
+
+    listed = client.get(OWNERS, headers=admin_auth).json()
+
+    assert [(o["owner_id"], o["owner_email"]) for o in listed] == [
+        (owner.public_id, owner.email)
+    ]
+    assert listed[0]["key_id_masked"].endswith("1234")
+    assert listed[0]["has_webhook_secret"] is False
+    assert listed[0]["change_approved"] is False
+
+
+def test_the_keys_listing_never_carries_a_secret(client, admin_auth, owner_auth):
+    _set_keys(client, owner_auth, key_id="rzp_live_abcd1234")
+
+    body = client.get(OWNERS, headers=admin_auth).text
+
+    assert KEY_SECRET not in body
+    assert "rzp_live_abcd" not in body
+    assert "encrypted" not in body
+
+
+def test_the_history_keeps_a_decided_request_and_who_decided(
+    client, admin_auth, admin, pending
+):
+    request_id = _queued_id(client, admin_auth)
+    client.post(
+        f"{QUEUE}/{request_id}/review",
+        headers=admin_auth,
+        json={"approve": False, "note": "the account name does not match"},
+    )
+
+    history = client.get(HISTORY, headers=admin_auth).json()
+
+    assert [(r["id"], r["status"], r["reviewed_by"]) for r in history] == [
+        (request_id, "rejected", admin.email)
+    ]
+    assert history[0]["review_note"] == "the account name does not match"
+
+
+def test_a_decided_requests_proof_can_still_be_seen(client, admin_auth, pending):
+    """After a takeover the question is what the approver was shown, so the
+    proof outlives the decision. Guards against a "pending only" filter
+    creeping into `proof_key`."""
+    request_id = _queued_id(client, admin_auth)
+    client.post(f"{QUEUE}/{request_id}/review", headers=admin_auth, json={"approve": True})
+
+    response = client.get(f"{QUEUE}/{request_id}/proof", headers=admin_auth)
+
+    assert response.status_code == 200
+    assert response.content == PROOF_BYTES
+
+
+def test_the_history_never_carries_a_storage_path(client, admin_auth, pending):
+    body = client.get(HISTORY, headers=admin_auth).text
+
+    assert "proofs/" not in body
+    assert "proof_path" not in body
+
+
+def test_an_owner_cannot_read_anybodys_keys_or_history(client, owner_auth, pending):
+    assert client.get(OWNERS, headers=owner_auth).status_code == 403
+    assert client.get(HISTORY, headers=owner_auth).status_code == 403

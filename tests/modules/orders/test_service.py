@@ -16,10 +16,14 @@ from app.modules.kiosks.models import Kiosk, KioskPaper
 from app.modules.orders.models import ItemKind, OrderState, PaymentMethod
 from app.modules.orders.service import (
     ALREADY_PAID,
+    ALREADY_REFUNDED,
     COLOUR_NOT_OFFERED,
+    NOT_PARTLY_FAILED,
+    NOTHING_TO_CONFIRM,
     ORDER_EXPIRED,
     ORDER_LIFETIME,
     RequestedDocument,
+    confirm_order_printed,
     expire_stale_orders,
     mark_paid,
     place_order,
@@ -892,3 +896,271 @@ def test_colour_is_offered_by_default(db_session, user, kiosk):
     )
 
     assert order.items[0].colour is True
+
+
+# ── an operator saying a failed print did come out ──────────────────────────
+#
+# A shop clears a jam, the job comes out, the student takes it -- and the order
+# still says partly failed, on the student's screen, the owner's and the
+# console's. An order's state is derived from its prints, so the fix is made to
+# the prints: the failed ones become printed and the order re-derives. Writing
+# COMPLETED onto the order would be a second answer to "how did this go" that
+# the next thing to re-derive it would quietly overwrite.
+
+
+class _Ledger:
+    """What would leave the tray. Paper is kiosks' business, not orders'."""
+
+    def __init__(self):
+        self.calls = []
+
+    def consume(self, db, kiosk_id, *, predicted_sheets, actual_sheets, reference):
+        self.calls.append((kiosk_id, predicted_sheets, actual_sheets, reference))
+
+    @property
+    def deducted(self):
+        return sum(call[2] or 0 for call in self.calls)
+
+
+def _partly_failed(db_session, user, kiosk, reference):
+    """Two documents: one printed, and one the device said failed."""
+    from app.modules.orders.service import pay_with_wallet, refresh_order_state
+
+    _funded(db_session, user, reference)
+    order = place_order(
+        db_session,
+        user=user,
+        kiosk=kiosk,
+        requests=[
+            request_for(make_document(db_session, user)),
+            request_for(make_document(db_session, user)),
+        ],
+        method=PaymentMethod.WALLET,
+    )
+    pay_with_wallet(db_session, order)
+
+    printed, failed = (
+        db_session.query(PrintTask)
+        .filter_by(kiosk_id=kiosk.id)
+        .order_by(PrintTask.id)
+        .all()
+    )
+    printed.state = TaskState.PRINTED
+    printed.actual_sheets = printed.predicted_sheets
+    failed.state = TaskState.FAILED
+    failed.error_code = "JAM"
+    db_session.flush()
+    refresh_order_state(db_session, document_id=printed.document_id, kiosk_id=kiosk.id)
+    assert order.state is OrderState.PARTIALLY_FAILED
+    return order, failed
+
+
+def _last_week(db_session, user, kiosk, document, reference):
+    """The same file, printed at the same shop a week ago, and failed.
+
+    A test runs inside one transaction, so everything in it shares one `now()`
+    -- the earlier order and its print are moved back by hand. In production
+    they are simply older.
+    """
+    from app.modules.orders.service import pay_with_wallet
+
+    _funded(db_session, user, reference)
+    earlier = place_order(
+        db_session,
+        user=user,
+        kiosk=kiosk,
+        requests=[request_for(document)],
+        method=PaymentMethod.WALLET,
+    )
+    pay_with_wallet(db_session, earlier)
+
+    old = db_session.query(PrintTask).filter_by(kiosk_id=kiosk.id).one()
+    old.state = TaskState.FAILED
+    week_ago = datetime.now(UTC) - timedelta(days=7)
+    earlier.created_at = week_ago
+    old.created_at = week_ago
+    # Settled long ago, so nothing re-derives it.
+    earlier.state = OrderState.REFUNDED
+    db_session.flush()
+    return old
+
+
+def test_a_partly_failed_order_completes_once_its_failed_print_is_confirmed(
+    db_session, user, kiosk
+):
+    order, failed = _partly_failed(db_session, user, kiosk, "confirm_1")
+
+    confirm_order_printed(db_session, order, _Ledger())
+
+    assert failed.state is TaskState.PRINTED
+    assert order.state is OrderState.COMPLETED
+
+
+def test_confirming_takes_the_paper_the_failed_print_did_not(db_session, user, kiosk):
+    """Every screen that now says "completed" also has to mean the tray is that
+    much lighter. A shop whose counter believes in paper it has not got runs dry
+    in the middle of somebody's job."""
+    order, failed = _partly_failed(db_session, user, kiosk, "confirm_2")
+    ledger = _Ledger()
+
+    confirm_order_printed(db_session, order, ledger)
+
+    assert ledger.deducted == failed.predicted_sheets
+    assert {call[0] for call in ledger.calls} == {kiosk.id}
+
+
+def test_it_says_which_prints_it_confirmed_and_why_they_had_failed(
+    db_session, user, kiosk
+):
+    """The print's own error is cleared -- one that came out should not read as
+    broken -- so the reason leaves with the answer, for the audit entry."""
+    order, failed = _partly_failed(db_session, user, kiosk, "confirm_3")
+
+    confirmed = confirm_order_printed(db_session, order, _Ledger())
+
+    assert [(c.task_id, c.error_code) for c in confirmed] == [
+        (failed.public_id, "JAM")
+    ]
+
+
+def test_an_order_still_printing_cannot_be_marked_printed(db_session, user, kiosk):
+    """Paid and queued: the printer has not finished with it, and marking it
+    done now would take its paper again when the device reports."""
+    from app.modules.orders.service import pay_with_wallet
+
+    _funded(db_session, user, "confirm_4")
+    order = place_order(
+        db_session,
+        user=user,
+        kiosk=kiosk,
+        requests=[request_for(make_document(db_session, user))],
+        method=PaymentMethod.WALLET,
+    )
+    pay_with_wallet(db_session, order)
+
+    with pytest.raises(Conflict) as refused:
+        confirm_order_printed(db_session, order, _Ledger())
+
+    assert refused.value.detail == NOT_PARTLY_FAILED
+
+
+def test_an_order_cannot_be_marked_printed_twice(db_session, user, kiosk):
+    """A double click must not empty the tray twice. The order having left
+    PARTIALLY_FAILED is what stops it -- a mechanism, not a check to remember."""
+    order, _ = _partly_failed(db_session, user, kiosk, "confirm_5")
+    ledger = _Ledger()
+    confirm_order_printed(db_session, order, ledger)
+    calls = len(ledger.calls)
+
+    with pytest.raises(Conflict) as refused:
+        confirm_order_printed(db_session, order, ledger)
+
+    assert refused.value.detail == NOT_PARTLY_FAILED
+    assert len(ledger.calls) == calls
+
+
+def test_an_order_with_money_given_back_cannot_be_marked_printed(
+    db_session, user, kiosk
+):
+    """The operator's decision, kept as a rule. Once any of it has gone back,
+    "it printed after all" contradicts a refund somebody already made, and the
+    order would read as completed with the student's money partly returned.
+    Untangling that is a conversation, not a button."""
+    from app.modules.payments import payment_for_order
+
+    order, failed = _partly_failed(db_session, user, kiosk, "confirm_6")
+    payment_for_order(db_session, order.id).refunded_inr = Decimal("5.00")
+    db_session.flush()
+    ledger = _Ledger()
+
+    with pytest.raises(Conflict) as refused:
+        confirm_order_printed(db_session, order, ledger)
+
+    assert refused.value.detail == ALREADY_REFUNDED
+    assert failed.state is TaskState.FAILED
+    assert order.state is OrderState.PARTIALLY_FAILED
+    assert ledger.calls == []
+
+
+def test_a_cancelled_print_is_not_confirmed(db_session, user, kiosk):
+    """Cancelled means it never reached the printer, so "it came out after all"
+    cannot be true of it."""
+    order, failed = _partly_failed(db_session, user, kiosk, "confirm_7")
+    failed.state = TaskState.CANCELLED
+    db_session.flush()
+
+    with pytest.raises(Conflict) as refused:
+        confirm_order_printed(db_session, order, _Ledger())
+
+    assert refused.value.detail == NOTHING_TO_CONFIRM
+    assert order.state is OrderState.PARTIALLY_FAILED
+
+
+def test_an_earlier_orders_failed_print_is_left_alone(db_session, user, kiosk):
+    """A print names a document and a kiosk, never an order -- the root of the
+    morning of refunds. The same file failed here last week and was refunded;
+    confirming today's order must not reach back, mark that one printed, and
+    take its paper a second time."""
+    from app.modules.orders.service import pay_with_wallet, refresh_order_state
+
+    document = make_document(db_session, user)
+    old = _last_week(db_session, user, kiosk, document, "confirm_8a")
+
+    _funded(db_session, user, "confirm_8b")
+    order = place_order(
+        db_session,
+        user=user,
+        kiosk=kiosk,
+        requests=[request_for(document), request_for(make_document(db_session, user))],
+        method=PaymentMethod.WALLET,
+    )
+    pay_with_wallet(db_session, order)
+    again, other = (
+        db_session.query(PrintTask)
+        .filter(PrintTask.kiosk_id == kiosk.id, PrintTask.id != old.id)
+        .order_by(PrintTask.id)
+        .all()
+    )
+    again.state = TaskState.FAILED
+    other.state = TaskState.PRINTED
+    db_session.flush()
+    refresh_order_state(db_session, document_id=other.document_id, kiosk_id=kiosk.id)
+    ledger = _Ledger()
+
+    confirm_order_printed(db_session, order, ledger)
+
+    assert old.state is TaskState.FAILED
+    assert again.state is TaskState.PRINTED
+    assert ledger.deducted == again.predicted_sheets
+    assert order.state is OrderState.COMPLETED
+
+
+def test_a_reprint_does_not_inherit_an_earlier_failure(db_session, user, kiosk):
+    """Found while building the confirm. The same file failed here last week and
+    was printed again today; today's order read last week's failed print as its
+    own and settled PARTIALLY_FAILED with every page in the student's hand."""
+    from app.modules.orders.service import pay_with_wallet, refresh_order_state
+
+    document = make_document(db_session, user)
+    old = _last_week(db_session, user, kiosk, document, "reprint_a")
+
+    _funded(db_session, user, "reprint_b")
+    order = place_order(
+        db_session,
+        user=user,
+        kiosk=kiosk,
+        requests=[request_for(document)],
+        method=PaymentMethod.WALLET,
+    )
+    pay_with_wallet(db_session, order)
+    today = (
+        db_session.query(PrintTask)
+        .filter(PrintTask.kiosk_id == kiosk.id, PrintTask.id != old.id)
+        .one()
+    )
+    today.state = TaskState.PRINTED
+    db_session.flush()
+
+    refresh_order_state(db_session, document_id=document.id, kiosk_id=kiosk.id)
+
+    assert order.state is OrderState.COMPLETED

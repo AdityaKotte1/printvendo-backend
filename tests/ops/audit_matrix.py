@@ -53,6 +53,10 @@ AUDIT_MATRIX: dict[tuple[str, str], tuple[str, str]] = {
     ("PUT", "/v1/admin/kiosks/{kiosk_id}/location"): (AUDITED, ""),
     # Money going back is exactly what somebody has to answer for later.
     ("POST", "/v1/admin/orders/{order_id}/refund"): (AUDITED, ""),
+    # A failed print turned printed takes paper and closes a complaint. What
+    # the device had reported is cleared from the task, so this entry is the
+    # only place it survives.
+    ("POST", "/v1/admin/orders/{order_id}/confirm-printed"): (AUDITED, ""),
     ("POST", "/v1/owner/billing/subscription"): (EXEMPT, RECORDED_ELSEWHERE),
     ("POST", "/v1/owner/billing/subscription/{subscription_id}/verify"): (
         EXEMPT,

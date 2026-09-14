@@ -50,8 +50,11 @@ from app.modules.printing.pdfs import PdfFacts, inspect_pdf
 from app.modules.printing.photos import PhotoLayout, parse_layout, render_layout
 from app.modules.printing.storage import DocumentStore, StorageArea
 from app.modules.printing.tasks import (
+    ConfirmedPrint,
     PaperLedger,
     TaskOutcome,
+    confirm_failed_prints,
+    confirm_printed,
     report_blocked,
     report_failed,
     report_printed,
@@ -92,6 +95,9 @@ __all__ = [
     "queue_depth",
     "renew_lease",
     "report_blocked",
+    "ConfirmedPrint",
+    "confirm_failed_prints",
+    "confirm_printed",
     "report_failed",
     "report_printed",
     "render_layout",

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.core.crypto import SecretBox, mask_secret
 from app.core.errors import BadRequest, Conflict, NotFound
@@ -60,10 +60,14 @@ def _approved_request(db: Session, user_id: int) -> PaymentConfigChangeRequest |
     return db.execute(stmt).scalars().first()
 
 
-def view_config(db: Session, user_id: int) -> PaymentConfigView:
-    """What the owner app shows. Contains no secret, by construction."""
-    config = get_config(db, user_id)
+def _config_view(
+    config: KioskPaymentConfig | None, *, change_approved: bool
+) -> PaymentConfigView:
+    """The one place a stored configuration becomes something an API may say.
 
+    The owner's own page and the admin console's list both come through here,
+    so neither can show more of a key than the other.
+    """
     if config is None or not config.is_configured:
         return PaymentConfigView(
             is_configured=False,
@@ -76,8 +80,73 @@ def view_config(db: Session, user_id: int) -> PaymentConfigView:
         is_configured=True,
         key_id_masked=mask_secret(config.razorpay_key_id or ""),
         configured_at=config.configured_at,
-        can_update=_approved_request(db, user_id) is not None,
+        can_update=change_approved,
     )
+
+
+def view_config(db: Session, user_id: int) -> PaymentConfigView:
+    """What the owner app shows. Contains no secret, by construction."""
+    config = get_config(db, user_id)
+    configured = config is not None and config.is_configured
+    return _config_view(
+        config,
+        change_approved=configured and _approved_request(db, user_id) is not None,
+    )
+
+
+@dataclass(frozen=True)
+class ConfiguredOwnerView:
+    """One account's payment keys, as an admin may see them.
+
+    `keys` is exactly what the owner's own page shows -- see `_config_view`.
+    Whether a webhook secret is set is a yes or a no; what it is never leaves.
+    """
+
+    owner_public_id: str
+    owner_email: str
+    owner_name: str | None
+    keys: PaymentConfigView
+    has_webhook_secret: bool
+
+
+def configured_owners(db: Session, *, limit: int = 500) -> list[ConfiguredOwnerView]:
+    """Every account collecting into its own Razorpay, most recently set first.
+
+    Two queries however many there are: the accounts with their owners joined
+    in, then which of them hold an approved change not yet used. Calling
+    `view_config` per row would be the legacy audit's N+1 in a new place.
+    """
+    rows = db.execute(
+        select(KioskPaymentConfig, User)
+        .join(User, User.id == KioskPaymentConfig.user_id)
+        .where(KioskPaymentConfig.is_configured.is_(True))
+        .order_by(
+            KioskPaymentConfig.configured_at.desc().nulls_last(),
+            KioskPaymentConfig.id.desc(),
+        )
+        .limit(limit)
+    ).all()
+    if not rows:
+        return []
+
+    approved = set(
+        db.execute(
+            select(PaymentConfigChangeRequest.user_id).where(
+                PaymentConfigChangeRequest.user_id.in_([c.user_id for c, _ in rows]),
+                PaymentConfigChangeRequest.status == ChangeRequestStatus.APPROVED,
+            )
+        ).scalars()
+    )
+    return [
+        ConfiguredOwnerView(
+            owner_public_id=owner.public_id,
+            owner_email=owner.email,
+            owner_name=owner.full_name,
+            keys=_config_view(config, change_approved=config.user_id in approved),
+            has_webhook_secret=bool(config.razorpay_webhook_secret_encrypted),
+        )
+        for config, owner in rows
+    ]
 
 
 def set_keys(
@@ -258,9 +327,16 @@ class ChangeRequestView:
     created_at: datetime
     reviewed_at: datetime | None
     review_note: str | None
+    # Who decided, by address. None while it waits.
+    reviewed_by_email: str | None = None
 
 
-def _view(request: PaymentConfigChangeRequest, owner: User) -> ChangeRequestView:
+def _view(
+    request: PaymentConfigChangeRequest,
+    owner: User,
+    *,
+    reviewed_by_email: str | None = None,
+) -> ChangeRequestView:
     return ChangeRequestView(
         public_id=request.public_id,
         owner_public_id=owner.public_id,
@@ -271,6 +347,7 @@ def _view(request: PaymentConfigChangeRequest, owner: User) -> ChangeRequestView
         created_at=request.created_at,
         reviewed_at=request.reviewed_at,
         review_note=request.review_note,
+        reviewed_by_email=reviewed_by_email,
     )
 
 
@@ -293,6 +370,32 @@ def pending_change_requests(db: Session, *, limit: int = 100) -> list[ChangeRequ
         .limit(limit)
     ).all()
     return [_view(request, owner) for request, owner in rows]
+
+
+def change_request_history(db: Session, *, limit: int = 200) -> list[ChangeRequestView]:
+    """Every request, whatever became of it, newest first.
+
+    The queue answers "what is waiting"; this answers "who changed where this
+    shop's money goes, when, and on whose say-so" -- the question asked after
+    somebody's takings go missing. Newest first because it is read as a
+    history, not worked through as a list.
+
+    The reviewer is joined in beside the owner, so a page costs one query.
+    """
+    reviewer = aliased(User)
+    rows = db.execute(
+        select(PaymentConfigChangeRequest, User, reviewer.email)
+        .join(User, User.id == PaymentConfigChangeRequest.user_id)
+        .outerjoin(reviewer, reviewer.id == PaymentConfigChangeRequest.reviewed_by_user_id)
+        .order_by(
+            PaymentConfigChangeRequest.created_at.desc(),
+            PaymentConfigChangeRequest.id.desc(),
+        )
+        .limit(limit)
+    ).all()
+    return [
+        _view(request, owner, reviewed_by_email=email) for request, owner, email in rows
+    ]
 
 
 def _by_public_id(db: Session, public_id: str) -> PaymentConfigChangeRequest:
@@ -327,7 +430,10 @@ def review_change_by_id(
     db.flush()
 
     owner = db.execute(select(User).where(User.id == request.user_id)).scalar_one()
-    return _view(request, owner)
+    reviewer = db.execute(
+        select(User.email).where(User.id == reviewer_user_id)
+    ).scalar_one_or_none()
+    return _view(request, owner, reviewed_by_email=reviewer)
 
 
 def proof_key(db: Session, public_id: str) -> str:

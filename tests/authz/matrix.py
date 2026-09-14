@@ -181,6 +181,11 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     # request, and an account takeover would walk straight through it to
     # redirecting every rupee that owner's kiosks collect.
     ("GET", "/v1/admin/payment-config/change-requests"): {ADMIN},
+    # The record rather than the worklist: every request, and who decided it.
+    ("GET", "/v1/admin/payment-config/change-requests/history"): {ADMIN},
+    # Every account's keys, masked. Admin only: which shops collect into their
+    # own accounts, and since when, is a map of who handles money.
+    ("GET", "/v1/admin/payment-config/owners"): {ADMIN},
     # The proof of account ownership, as bytes. Authenticated for the same
     # reason it is not a static URL: it is evidence about somebody's bank
     # account, and the old dashboard served these from a path anyone could
@@ -212,6 +217,10 @@ MATRIX: dict[tuple[str, str], set[str]] = {
     # separate surface and a separate decision, and a student must never be
     # able to refund the order they placed.
     ("POST", "/v1/admin/orders/{order_id}/refund"): {ADMIN},
+    # Saying a failed print came out after all. Admin only: it takes a shop's
+    # paper and changes how an order went, which the student and the owner
+    # both read -- and the order it changes carries the student's identity.
+    ("POST", "/v1/admin/orders/{order_id}/confirm-printed"): {ADMIN},
     # One order, whole -- who paid, how the money moved, and what has already
     # been given back. **ADMIN alone, and here the audience is the control
     # rather than the scope.** The owner surface is built to be incapable of

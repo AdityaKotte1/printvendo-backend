@@ -11,6 +11,8 @@ message is byte-identical to one that never existed. A 403 would confirm that
 another kiosk holds a task with that id.
 """
 
+from datetime import datetime
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -83,10 +85,34 @@ def documents_of_user(
     )
 
 
+def _one_orders(stmt, *, document_ids: list[int], kiosk_id: int, since: datetime):
+    """Narrow a task query to one order's prints.
+
+    A task names a document and a kiosk and never an order, so "this order's
+    prints" has to be reconstructed -- and the same file printed at the same
+    shop last week is the same document at the same kiosk. Without a bound, a
+    reprint read last week's failure as its own and settled PARTIALLY_FAILED
+    with every page in the student's hand. What separates the two is time: an
+    order's tasks are made when it is paid, after it was placed, so nothing
+    older than the order can be one of its prints.
+
+    **`since` is the order's `created_at`, never its `paid_at`.** Both look
+    right; only one is. `created_at` on both tables is Postgres's `now()` -- the
+    start of the transaction, on one clock -- while `paid_at` is Python's clock
+    read partway through, so a task made in the same transaction as the payment
+    is *older* than `paid_at` and would be shut out of its own order.
+    """
+    return stmt.where(
+        PrintTask.document_id.in_(document_ids),
+        PrintTask.kiosk_id == kiosk_id,
+        PrintTask.created_at >= since,
+    )
+
+
 def task_states_at(
-    db: Session, *, document_ids: list[int], kiosk_id: int
+    db: Session, *, document_ids: list[int], kiosk_id: int, since: datetime
 ) -> list[TaskState]:
-    """What became of the tasks for these documents at this kiosk.
+    """What became of one order's prints.
 
     Asked by orders, which owns the question "is this whole order finished" and
     cannot answer it without knowing how each print went. States rather than
@@ -96,8 +122,61 @@ def task_states_at(
     if not document_ids:
         return []
 
-    stmt = select(PrintTask.state).where(
-        PrintTask.document_id.in_(document_ids),
-        PrintTask.kiosk_id == kiosk_id,
+    stmt = _one_orders(
+        select(PrintTask.state),
+        document_ids=document_ids,
+        kiosk_id=kiosk_id,
+        since=since,
     )
     return [TaskState(state) for state in db.execute(stmt).scalars()]
+
+
+def document_task_states(
+    db: Session, *, document_ids: list[int], kiosk_id: int, since: datetime
+) -> dict[int, list[TaskState]]:
+    """The same question, per document, for an operator reading one order.
+
+    A list per document rather than one state: an order may carry the same file
+    twice -- once in colour, once not -- and each line is its own print.
+    """
+    if not document_ids:
+        return {}
+
+    stmt = _one_orders(
+        select(PrintTask.document_id, PrintTask.state),
+        document_ids=document_ids,
+        kiosk_id=kiosk_id,
+        since=since,
+    )
+    found: dict[int, list[TaskState]] = {}
+    for document_id, state in db.execute(stmt).all():
+        found.setdefault(document_id, []).append(TaskState(state))
+    return found
+
+
+def failed_tasks_at(
+    db: Session, *, document_ids: list[int], kiosk_id: int, since: datetime
+) -> list[PrintTask]:
+    """One order's failed prints, locked, in the order they were made.
+
+    Locked because what happens next takes paper, and `consume_paper` dedupes
+    nothing. Two operators pressing the same button at once would otherwise
+    both read FAILED and both empty the tray; with the lock the second waits,
+    Postgres re-reads the row once the first commits, and it is no longer
+    failed.
+    """
+    if not document_ids:
+        return []
+
+    stmt = (
+        _one_orders(
+            select(PrintTask),
+            document_ids=document_ids,
+            kiosk_id=kiosk_id,
+            since=since,
+        )
+        .where(PrintTask.state == TaskState.FAILED)
+        .order_by(PrintTask.id)
+        .with_for_update()
+    )
+    return list(db.execute(stmt).scalars())

@@ -424,6 +424,31 @@ Copy `.env.example` to `.env` and fill it. The app refuses to boot with a
   a bare `String` returns a plain `str` after a database round-trip. These are
   StrEnums, so `value == Enum.X` still passes and tests stay green, while
   `value.value` raises `AttributeError`. The annotation must not lie.
+- **An order's prints are the tasks made since it was placed.** A task names a
+  document and a kiosk, never an order, so the same file printed at the same
+  shop last week looks identical by those two alone -- and a reprint read last
+  week's failure as its own and settled PARTIALLY_FAILED with every page in the
+  student's hand. `printing.repository._one_orders` bounds on
+  `created_at >= order.created_at`, and **never on `paid_at`**: `created_at` on
+  both tables is Postgres `now()`, the transaction's start on one clock, while
+  `paid_at` is Python's clock read partway through -- so a task made in the
+  paying transaction is *older* than `paid_at` and would be shut out of its own
+  order. Mutation-tested: bounding on `paid_at` fails five tests.
+- **"It printed after all" changes the prints, never the order.**
+  `orders.confirm_order_printed` turns an order's FAILED tasks PRINTED through
+  `printing.confirm_printed`, takes the paper the failure did not, and lets the
+  order re-derive through the same `_derive_from_prints` a device report uses.
+  The student's app, the owner's and the console agree because they read one
+  fact; earnings need nothing because they read the payment. Refused unless
+  PARTIALLY_FAILED, if any money has gone back (the operator's decision), or if
+  nothing failed. The tasks are locked `FOR UPDATE` before they are read,
+  because `consume_paper` dedupes nothing -- that lock is **not** mutation-tested;
+  there is no concurrent harness.
+- **One masking for payment keys.** `payments.configs._config_view` is the only
+  place a stored configuration becomes something an API may say. The owner's
+  own page and the admin console's list (`configured_owners`) both go through
+  it, so neither can show more of a key than the other; the list is two queries
+  however many owners there are.
 
 ## How this work is done
 
@@ -452,7 +477,7 @@ documents describing the same thing is how they drift.
 
 ## State of play
 
-**1704 tests passing, 116 routes, 12 import contracts kept, ruff clean.** Verify with:
+**1823 tests passing, 120 routes, 12 import contracts kept, ruff clean.** Verify with:
 
 ```bash
 .venv/Scripts/python -m pytest -q && .venv/Scripts/lint-imports && .venv/Scripts/python -m ruff check .
@@ -471,7 +496,7 @@ documents describing the same thing is how they drift.
 | `wallet/` | ledger-as-record with the balance derived from it, double-spend refused by a conditional UPDATE rather than a read-check-write, `UNIQUE (wallet_id, reference)` for replayed webhooks |
 | `printing/` | print options + the one workload calculation, Document and PrintTask models, **atomic claim with `FOR UPDATE SKIP LOCKED`** and lease recovery, storage (opaque keys), PDF pipeline (Ghostscript under `-dSAFER`), task progress + paper from device-reported sheets, photo→A4 layout, retention |
 | `ops/` | audit trail (one rule, matrix-enforced) and deduplicating admin alerts that stand down when the condition clears |
-| `api/` | `deps`, `student/*`, `owner/*` (incl. the orders CSV, **device commands**, **the day series** and **an owner refund**), `refiller/kiosks`, `device/*` (incl. **the WebSocket**, **commands** and **printer health**), **`admin/*`**, **rate limits** — 114 routes, all in `tests/authz/matrix.py` |
+| `api/` | `deps`, `student/*`, `owner/*` (incl. the orders CSV, **device commands**, **the day series** and **an owner refund**), `refiller/kiosks`, `device/*` (incl. **the WebSocket**, **commands** and **printer health**), **`admin/*`**, **rate limits** — 120 routes, all in `tests/authz/matrix.py` |
 | `jobs/` | the scheduler and four sweeps: order expiry, file retention, the offline-kiosk watcher, the paper watcher |
 | `cli/` | `bootstrap-admin`, `seed`, `provision-kiosk` — the first way in, and a world to click through |
 | `provisioning` | one use case, two roots: stand a kiosk up and say what is still missing |

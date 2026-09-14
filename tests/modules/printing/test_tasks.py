@@ -16,7 +16,9 @@ from app.modules.printing.claims import LEASE, claim_next_task
 from app.modules.printing.models import Document, PrintTask, TaskState
 from app.modules.printing.tasks import (
     ALREADY_FINISHED,
+    NOT_FAILED,
     NOT_IN_HAND,
+    confirm_printed,
     report_blocked,
     report_failed,
     report_printed,
@@ -310,3 +312,105 @@ def test_negative_sheets_are_refused(db_session, claimed, ledger):
         report_printed(db_session, claimed, ledger, sheets_used=-3)
 
     assert ledger.calls == []
+
+
+
+# ── an operator saying it did come out after all ────────────────────────────
+#
+# A job the device reported FAILED sometimes printed anyway, once somebody at
+# the shop cleared the jam or reloaded the tray. `report_printed` refuses a
+# finished task on purpose -- a device reporting late must not resurrect one --
+# so this is a separate transition, and only ever from FAILED.
+
+
+def test_a_failed_job_confirmed_as_printed_is_printed(db_session, claimed, ledger):
+    report_failed(db_session, claimed, ledger, sheets_used=None, error_code="JAM")
+
+    confirm_printed(db_session, claimed, ledger)
+
+    assert claimed.state is TaskState.PRINTED
+    assert claimed.finished_at is not None
+
+
+def test_confirming_takes_the_paper_the_failure_did_not(db_session, claimed, ledger):
+    """The failure deducted only what the device reported -- two of the six
+    sheets. If all six came out, the tray is four short of what the system
+    believes, and a shop runs dry while the counter says it has paper."""
+    report_failed(db_session, claimed, ledger, sheets_used=2, error_code="JAM")
+
+    confirm_printed(db_session, claimed, ledger)
+
+    assert ledger.deducted == 4
+    assert claimed.actual_sheets == 6
+
+
+def test_a_failure_that_reported_nothing_is_charged_the_whole_job(
+    db_session, claimed, ledger
+):
+    """A failure with no figure deducted zero, so the whole prediction is
+    still owed to the tray."""
+    report_failed(db_session, claimed, ledger, sheets_used=None, error_code="OFFLINE")
+
+    confirm_printed(db_session, claimed, ledger)
+
+    assert ledger.deducted == 6
+
+
+def test_the_failure_reason_no_longer_describes_it(db_session, claimed, ledger):
+    """A job that printed and still carries "tray jammed" reads as broken to
+    whoever looks at it next. The reason is kept where it belongs -- in the
+    audit entry the admin route writes, alongside who confirmed it."""
+    report_failed(
+        db_session, claimed, ledger, sheets_used=None,
+        error_code="JAM", error_message="tray jammed",
+    )
+
+    confirm_printed(db_session, claimed, ledger)
+
+    assert claimed.error_code is None
+    assert claimed.error_message is None
+
+
+def test_the_order_behind_it_hears_about_it(db_session, claimed, ledger, outcome):
+    report_failed(db_session, claimed, ledger, sheets_used=None, error_code="JAM")
+
+    confirm_printed(db_session, claimed, ledger, outcome=outcome)
+
+    assert outcome.moves[-1] is TaskState.PRINTED
+
+
+# ── only from FAILED, and only once ─────────────────────────────────────────
+
+
+def test_a_job_that_printed_normally_cannot_be_confirmed_again(
+    db_session, claimed, ledger
+):
+    report_printed(db_session, claimed, ledger, sheets_used=6)
+
+    with pytest.raises(Conflict) as refused:
+        confirm_printed(db_session, claimed, ledger)
+
+    assert refused.value.detail == NOT_FAILED
+
+
+def test_a_job_still_on_the_machine_cannot_be_confirmed(db_session, claimed, ledger):
+    """Confirming a job the printer still has would take its paper now and
+    again when the device reports it."""
+    with pytest.raises(Conflict) as refused:
+        confirm_printed(db_session, claimed, ledger)
+
+    assert refused.value.detail == NOT_FAILED
+
+
+def test_confirming_twice_takes_the_paper_once(db_session, claimed, ledger):
+    """`consume_paper` adds whatever it is given and dedupes nothing, so the
+    only thing standing between a double click and a tray emptied twice is the
+    task having left FAILED. That is the mechanism, not a check to remember."""
+    report_failed(db_session, claimed, ledger, sheets_used=None, error_code="JAM")
+    confirm_printed(db_session, claimed, ledger)
+    calls = len(ledger.calls)
+
+    with pytest.raises(Conflict):
+        confirm_printed(db_session, claimed, ledger)
+
+    assert len(ledger.calls) == calls

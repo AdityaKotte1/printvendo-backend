@@ -526,6 +526,27 @@ class ChangeRequestResponse(BaseModel):
     created_at: datetime
     reviewed_at: datetime | None
     review_note: str | None
+    # Who decided, by address. None while it waits.
+    reviewed_by: str | None = None
+
+
+class ConfiguredOwnerResponse(BaseModel):
+    """One account's payment keys as the console shows them: masked.
+
+    No field for the key secret or the webhook secret -- only whether the
+    latter is set. The same mechanism as `PaymentConfigResponse`: a type with
+    nowhere to put a secret cannot leak one, however the handler is edited.
+    """
+
+    owner_id: str
+    owner_email: str
+    owner_name: str | None
+    key_id_masked: str | None
+    configured_at: datetime | None
+    has_webhook_secret: bool
+    # An admin approved a change the owner has not used yet: the keys can be
+    # replaced right now without anybody else agreeing.
+    change_approved: bool
 
 
 class ReviewChangeRequest(BaseModel):
@@ -739,6 +760,16 @@ class OrderRefundResponse(BaseModel):
     created_at: datetime
 
 
+class AdminOrderItemResponse(OrderItemResponse):
+    """A line as an operator sees it, including how its print went.
+
+    A type of its own so the student's and the owner's payloads do not change.
+    `print_state` is None for a line nothing was ever sent to a printer for.
+    """
+
+    print_state: str | None
+
+
 class AdminOrderResponse(BaseModel):
     """One order, whole, for the person who has to answer for it.
 
@@ -761,11 +792,21 @@ class AdminOrderResponse(BaseModel):
     refunded_at: datetime | None
     expires_at: datetime | None
     student: OrderStudentResponse
-    items: list[OrderItemResponse]
+    items: list[AdminOrderItemResponse]
     # Absent rather than empty for an order nobody paid for: there is no payment
     # to describe, and an empty object would invite reading zeroes off it.
     payment: OrderPaymentResponse | None
     refunds: list[OrderRefundResponse]
+
+
+class ConfirmPrintedRequest(BaseModel):
+    """An operator saying a failed print came out after all.
+
+    The note is for the audit entry -- "cleared the jam, student collected" --
+    beside what the device had reported, which the confirm clears from the task.
+    """
+
+    note: str | None = Field(default=None, max_length=300)
 
 
 class OwnerRefundRequest(BaseModel):

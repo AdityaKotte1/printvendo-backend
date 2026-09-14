@@ -34,15 +34,18 @@ from app.modules.orders.models import (
     PaymentMethod,
 )
 from app.modules.orders.quotes import OrderQuote, quote_line
-from app.modules.payments import PaymentKind, record_wallet_payment
+from app.modules.payments import PaymentKind, payment_for_order, record_wallet_payment
 from app.modules.payments.gate import Gateway, kiosk_payment_gate, wallet_may_be_spent
 from app.modules.printing import (
     TERMINAL_TASK_STATES,
+    ConfirmedPrint,
     Document,
     DocumentState,
+    PaperLedger,
     PrintOptions,
     PrintTask,
     TaskState,
+    confirm_failed_prints,
 )
 from app.modules.printing.enqueue import committed_sheets, enqueue_task
 from app.modules.printing.repository import task_states_at
@@ -68,6 +71,15 @@ ALREADY_PAID = "That order has already been paid for."
 ORDER_NOT_OPEN = "That order is no longer open for payment."
 ORDER_EXPIRED = "That order expired before it was paid. Please place it again."
 WRONG_METHOD = "That order was not set up to be paid from your wallet."
+NOT_PARTLY_FAILED = "Only an order that partly failed can be marked as printed."
+ALREADY_REFUNDED = (
+    "Money has already been given back on this order, so it cannot be marked "
+    "as printed."
+)
+NOTHING_TO_CONFIRM = (
+    "Nothing on this order is marked as failed, so there is nothing to confirm. "
+    "A cancelled print never reached the printer."
+)
 
 
 @dataclass(frozen=True)
@@ -407,10 +419,32 @@ def refresh_order_state(db: Session, *, document_id: int, kiosk_id: int) -> Orde
     if order is None:
         return None
 
-    documents = [i.document_id for i in order.items if i.document_id is not None]
-    states = task_states_at(db, document_ids=documents, kiosk_id=kiosk_id)
+    _derive_from_prints(db, order)
+    return order
+
+
+def _documents_of(order: Order) -> list[int]:
+    return [i.document_id for i in order.items if i.document_id is not None]
+
+
+def _derive_from_prints(db: Session, order: Order) -> None:
+    """Set an order's state from how its prints went.
+
+    One implementation for both ways a paid order moves: a device reporting,
+    and an operator confirming that a print came out after all. Two would
+    drift, and the operator's would be the one run too rarely to notice.
+
+    Only this order's prints count -- see `printing.repository._one_orders` for
+    why that has to be bounded by when the order was placed.
+    """
+    states = task_states_at(
+        db,
+        document_ids=_documents_of(order),
+        kiosk_id=order.kiosk_id,
+        since=order.created_at,
+    )
     if not states:
-        return order
+        return
 
     unfinished = [s for s in states if s not in TERMINAL_TASK_STATES]
     if unfinished:
@@ -426,7 +460,54 @@ def refresh_order_state(db: Session, *, document_id: int, kiosk_id: int) -> Orde
 
     db.add(order)
     db.flush()
-    return order
+
+
+def confirm_order_printed(
+    db: Session, order: Order, ledger: PaperLedger
+) -> list[ConfirmedPrint]:
+    """Mark a partly failed order's failed prints as printed, and re-derive it.
+
+    For the job that jammed, was cleared, and came out -- with the student
+    holding the pages and every screen still saying it failed. **The prints are
+    what change, never the order's state directly.** The order then derives
+    COMPLETED the way it always does, so the student's app, the owner's and
+    this console agree because they are reading one fact. Earnings need nothing:
+    they are read off the payment, which never moved.
+
+    Paper is taken for what the failure did not already account for, through
+    the kiosk's own ledger, so the tray agrees with the order.
+
+    Refused, each with a sentence an operator can act on:
+
+    - unless the order partly failed. Anything else is still printing, already
+      settled, or never paid;
+    - if any money has gone back on it. The operator's decision: "it printed
+      after all" contradicts a refund somebody already made, and untangling
+      that is a conversation rather than a button;
+    - if nothing on it failed. A cancelled print never reached the printer, so
+      it cannot have come out.
+
+    Returns what was confirmed, with why each had failed, for the audit entry.
+    """
+    if order.state is not OrderState.PARTIALLY_FAILED:
+        raise Conflict(NOT_PARTLY_FAILED)
+
+    payment = payment_for_order(db, order.id)
+    if payment is not None and payment.refunded_inr > 0:
+        raise Conflict(ALREADY_REFUNDED)
+
+    confirmed = confirm_failed_prints(
+        db,
+        document_ids=_documents_of(order),
+        kiosk_id=order.kiosk_id,
+        since=order.created_at,
+        ledger=ledger,
+    )
+    if not confirmed:
+        raise Conflict(NOTHING_TO_CONFIRM)
+
+    _derive_from_prints(db, order)
+    return confirmed
 
 
 # ── expiry ──────────────────────────────────────────────────────────────────
