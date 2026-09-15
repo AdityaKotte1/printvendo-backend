@@ -35,12 +35,11 @@ from app.modules.kiosks import (
 )
 from app.modules.kiosks import repository as kiosk_repo
 from app.modules.ops import AlertSeverity, raise_alert, resolve_by_key
-from app.modules.orders import expire_stale_orders
+from app.modules.orders import expire_stale_orders, refresh_order_state
 from app.modules.printing import (
     DocumentStore,
-    TaskState,
+    fail_expired,
     purge_expired_files,
-    requeue_expired,
 )
 from app.notifying import notifier_for
 
@@ -74,39 +73,32 @@ def purge_files(db: Session, settings: Settings) -> str:
     return f"purged the files of {len(purged)} documents" if purged else ""
 
 
-def recover_lost_tasks(db: Session, settings: Settings) -> str:
-    """Give back work a device took and never reported on.
+def settle_lost_tasks(db: Session, settings: Settings) -> str:
+    """Fail work a device took and went quiet on, and tell its order.
 
-    `requeue_expired` was written with `claims.py`, documented there as the
-    crash-recovery half of claiming, exported from the module -- and called by
-    nothing. So an agent that died mid-job stranded that task in
-    SENT_TO_DEVICE for ever: the claim takes only QUEUED rows, so no device
-    could see it again, no report ever arrived, and `refresh_order_state` --
-    which runs on a report -- never ran. The order sat at PAID permanently and
-    no surface said why.
+    A lease is renewed by the device's heartbeat while it holds the job, so one
+    that runs out means the machine stopped answering -- a crash, a restart, a
+    pulled plug. Nothing reported on the job, so its order used to sit at PAID
+    for ever with nothing on any surface saying why.
 
-    One shop manufactured several of these in an afternoon of restarts, and the
-    only way out was an UPDATE typed by hand.
+    **Failed, never handed out again.** This sweep used to requeue, and a
+    Windows kiosk whose printer was out of paper held a job in its spooler past
+    the lease, was handed the same job again, spooled another copy, then another
+    -- and every copy came out when paper went in, with no new order anywhere.
+    Whether a lost job printed is something only a person at the counter knows,
+    so its order derives PARTIALLY_FAILED and an operator refunds it or marks it
+    printed.
 
-    Every minute, because the thing being given back is a print somebody has
-    already paid for and is standing at a counter waiting for. The lease is
-    fifteen minutes and is renewed on every progress report, so a job genuinely
-    on a printer is never touched -- only silence expires a lease.
+    Every minute, so a student's screen stops saying "queued" soon after the
+    machine goes quiet.
     """
-    lost = requeue_expired(db)
+    lost = fail_expired(db)
+    for task in lost:
+        refresh_order_state(db, document_id=task.document_id, kiosk_id=task.kiosk_id)
+
     if not lost:
         return ""
-
-    requeued = [task for task in lost if task.state is TaskState.QUEUED]
-    failed = len(lost) - len(requeued)
-
-    said = []
-    if requeued:
-        said.append(f"{len(requeued)} print tasks went back in the queue")
-    if failed:
-        said.append(f"{failed} were failed after too many attempts")
-    return "; ".join(said)
-
+    return f"{len(lost)} print tasks were failed after their kiosk stopped answering"
 
 def watch_offline_kiosks(db: Session, settings: Settings) -> str:
     """Report shops that cannot currently be sent work.

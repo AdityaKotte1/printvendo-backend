@@ -24,9 +24,13 @@ and takes the next one, or gets nothing. Two requests physically cannot receive
 the same task, however many agents, threads or prefetchers are asking.
 
 Crash recovery is deliberately a *separate* mechanism. A claimed task carries a
-lease; one that goes quiet past its deadline is requeued by `requeue_expired`.
-That is a decision made once, with a visible attempt count, rather than the old
-behaviour of leaving every task claimable the entire time it was printing.
+lease, renewed by the device's heartbeat while it holds the task; one whose
+device goes quiet past the deadline is **failed by `fail_expired`, never handed
+out again**. It used to be requeued, and a Windows kiosk whose printer was out
+of paper held a job in its spooler past the lease, was handed the same job
+again, spooled a second copy and then a third -- and when paper went in, every
+copy came out. Only a person can tell whether a lost job printed, so its order
+shows it failed and they refund it or mark it printed.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -39,14 +43,13 @@ from app.modules.printing.models import PrintTask, TaskState
 # How long a device has to finish before its claim is considered lost.
 #
 # Generous on purpose: a large colour job on a slow kiosk printer genuinely
-# takes minutes, and requeueing a task that is still printing is how you get the
-# duplicate this module exists to prevent. The device renews the lease as it
-# reports progress, so the deadline only matters when it has actually gone away.
+# takes minutes. The device renews the lease with a heartbeat that names the
+# task it holds, so the deadline only matters when it has actually gone quiet.
 LEASE = timedelta(minutes=15)
 
-# A task that has failed this many times stops being retried. Without a cap, a
-# document that crashes the printer is requeued forever and blocks the queue.
-MAX_ATTEMPTS = 3
+# States in which a device holds a task. Anything else is either waiting to be
+# claimed or finished, and neither has a lease to renew or to lose.
+_HELD = (TaskState.SENT_TO_DEVICE, TaskState.PRINTING)
 
 
 def claim_next_task(
@@ -100,8 +103,9 @@ def renew_lease(
 ) -> PrintTask:
     """Push back the deadline because the device is still working.
 
-    Called on every progress report. A long job therefore never has its lease
-    expire while it is genuinely printing -- only silence expires a lease.
+    Reached through `renew_held_lease` whenever the device's heartbeat names the
+    task. A long job therefore never has its lease expire while its machine is
+    still answering -- only silence expires a lease.
     """
     now = now or datetime.now(UTC)
     task.lease_expires_at = now + LEASE
@@ -109,24 +113,45 @@ def renew_lease(
     return task
 
 
-def requeue_expired(db: Session, *, now: datetime | None = None) -> list[PrintTask]:
-    """Return tasks whose device went silent to the queue.
+def renew_held_lease(
+    db: Session, *, kiosk_id: int, task_public_id: str, now: datetime | None = None
+) -> bool:
+    """Renew the lease of the task a device says it is holding. True if renewed.
 
-    The only path back to QUEUED. Nothing else may resurrect a claimed task,
-    which is what keeps "claimed" meaningful.
+    Only a task this kiosk holds. Anything else -- another kiosk's, a finished
+    one, an id that means nothing -- is ignored rather than refused, because the
+    caller is a heartbeat, and a heartbeat that fails makes a working shop look
+    offline.
+    """
+    task = db.execute(
+        select(PrintTask).where(
+            PrintTask.public_id == task_public_id,
+            PrintTask.kiosk_id == kiosk_id,
+            PrintTask.state.in_(_HELD),
+        )
+    ).scalar_one_or_none()
+    if task is None:
+        return False
+    renew_lease(db, task, now=now)
+    return True
 
-    A task that has exhausted its attempts is failed rather than requeued: a
-    document that crashes the printer would otherwise be handed out forever and
-    block every job behind it.
+
+def fail_expired(db: Session, *, now: datetime | None = None) -> list[PrintTask]:
+    """Fail the tasks whose device went quiet past their lease.
+
+    **Never back to the queue.** The device may have printed it: a job waiting
+    in a Windows spooler behind an empty tray is still in that spooler when a
+    second copy is sent, and both come out when paper goes in. Nothing on the
+    server can tell a job that never started from one sitting in a spooler, so
+    this decides nothing about the paper -- it records that nobody knows, and
+    the order derives PARTIALLY_FAILED for a person to refund or mark printed.
     """
     now = now or datetime.now(UTC)
 
     stale = list(
         db.execute(
             select(PrintTask).where(
-                PrintTask.state.in_(
-                    [TaskState.SENT_TO_DEVICE, TaskState.PRINTING]
-                ),
+                PrintTask.state.in_(_HELD),
                 PrintTask.lease_expires_at.is_not(None),
                 PrintTask.lease_expires_at < now,
             )
@@ -134,22 +159,17 @@ def requeue_expired(db: Session, *, now: datetime | None = None) -> list[PrintTa
     )
 
     for task in stale:
-        if task.attempts >= MAX_ATTEMPTS:
-            task.state = TaskState.FAILED
-            task.error_code = "LEASE_EXPIRED"
-            task.error_message = (
-                f"The kiosk stopped responding {task.attempts} times while "
-                "printing this. It has not been charged for again."
-            )
-            task.finished_at = now
-        else:
-            task.state = TaskState.QUEUED
-            task.claimed_at = None
-            task.lease_expires_at = None
+        task.state = TaskState.FAILED
+        task.error_code = "LEASE_EXPIRED"
+        task.error_message = (
+            "The kiosk stopped answering while it had this job. It was not sent "
+            "again, because it may already have printed."
+        )
+        task.finished_at = now
+        task.lease_expires_at = None
         db.add(task)
 
     return stale
-
 
 def queue_depth(db: Session, *, kiosk_id: int) -> int:
     """How many tasks are waiting at this kiosk.

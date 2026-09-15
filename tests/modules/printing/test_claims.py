@@ -15,11 +15,11 @@ from app.modules.identity.models import User
 from app.modules.kiosks.models import Kiosk
 from app.modules.printing.claims import (
     LEASE,
-    MAX_ATTEMPTS,
     claim_next_task,
+    fail_expired,
     queue_depth,
+    renew_held_lease,
     renew_lease,
-    requeue_expired,
 )
 from app.modules.printing.models import Document, PrintTask, TaskState
 
@@ -266,41 +266,49 @@ def test_two_concurrent_transactions_take_different_tasks(committed_queue):
         second.close()
 
 
-# ── leases and crash recovery ───────────────────────────────────────────────
+# ── leases, and what happens when one runs out ─────────────────────────────
+#
+# A job whose machine went quiet is failed, never handed out again. The machine
+# may have printed it: a Windows kiosk whose printer was out of paper held a job
+# in its spooler past the lease, was handed the same job again and spooled a
+# second copy, then a third -- and every copy came out when paper went in.
 
 
-def test_a_live_lease_is_not_requeued(db_session, kiosk, document):
-    """A long colour job is still printing, not lost. Requeueing it is exactly
-    the duplicate this module exists to prevent."""
+def test_a_live_lease_is_left_alone(db_session, kiosk, document):
     _task(db_session, kiosk, document)
     claim_next_task(db_session, kiosk_id=kiosk.id)
 
-    assert requeue_expired(db_session) == []
+    assert fail_expired(db_session) == []
 
 
-def test_an_expired_lease_is_requeued(db_session, kiosk, document):
-    _task(db_session, kiosk, document)
-    claimed = claim_next_task(db_session, kiosk_id=kiosk.id)
-
-    claimed.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
-    db_session.flush()
-
-    requeued = requeue_expired(db_session)
-    assert [t.id for t in requeued] == [claimed.id]
-    assert claimed.state is TaskState.QUEUED
-    assert claimed.claimed_at is None
-
-
-def test_a_requeued_task_can_be_claimed_again(db_session, kiosk, document):
+def test_an_expired_lease_fails_the_task(db_session, kiosk, document):
     _task(db_session, kiosk, document)
     claimed = claim_next_task(db_session, kiosk_id=kiosk.id)
     claimed.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
     db_session.flush()
-    requeue_expired(db_session)
 
-    again = claim_next_task(db_session, kiosk_id=kiosk.id)
-    assert again is not None
-    assert again.attempts == 2
+    lost = fail_expired(db_session)
+
+    assert [t.id for t in lost] == [claimed.id]
+    assert claimed.state is TaskState.FAILED
+    assert claimed.error_code == "LEASE_EXPIRED"
+    assert claimed.lease_expires_at is None
+    assert claimed.finished_at is not None
+
+
+def test_a_task_whose_lease_ran_out_is_never_handed_out_again(
+    db_session, kiosk, document
+):
+    """The defect, as a test. Handing it out again is how one shop printed the
+    same jobs over and over with no new orders."""
+    _task(db_session, kiosk, document)
+    claimed = claim_next_task(db_session, kiosk_id=kiosk.id)
+    claimed.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    db_session.flush()
+
+    fail_expired(db_session)
+
+    assert claim_next_task(db_session, kiosk_id=kiosk.id) is None
 
 
 def test_renewing_a_lease_keeps_a_long_job_alive(db_session, kiosk, document):
@@ -311,37 +319,70 @@ def test_renewing_a_lease_keeps_a_long_job_alive(db_session, kiosk, document):
     db_session.flush()
     renew_lease(db_session, claimed)
 
-    assert requeue_expired(db_session) == []
+    assert fail_expired(db_session) == []
     assert claimed.lease_expires_at > datetime.now(UTC)
 
 
-def test_a_task_that_keeps_killing_the_printer_stops_being_retried(
-    db_session, kiosk, document
-):
-    """Without a cap, a document that crashes the printer is handed out forever
-    and blocks every job behind it."""
-    _task(db_session, kiosk, document)
-
-    for _ in range(MAX_ATTEMPTS):
-        claimed = claim_next_task(db_session, kiosk_id=kiosk.id)
-        assert claimed is not None
-        claimed.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
-        db_session.flush()
-        requeue_expired(db_session)
-
-    assert claimed.state is TaskState.FAILED
-    assert claimed.error_code == "LEASE_EXPIRED"
-    assert claim_next_task(db_session, kiosk_id=kiosk.id) is None
-
-
-def test_a_finished_task_is_never_requeued(db_session, kiosk, document):
+def test_a_finished_task_is_never_touched(db_session, kiosk, document):
     _task(db_session, kiosk, document)
     claimed = claim_next_task(db_session, kiosk_id=kiosk.id)
     claimed.state = TaskState.PRINTED
     claimed.lease_expires_at = datetime.now(UTC) - timedelta(days=1)
     db_session.flush()
 
-    assert requeue_expired(db_session) == []
+    assert fail_expired(db_session) == []
+    assert claimed.state is TaskState.PRINTED
+
+
+def test_the_machine_holding_a_task_renews_its_lease(db_session, kiosk, document):
+    """What the heartbeat does when it names the job in hand, so a job waiting
+    behind an empty tray is not mistaken for a lost one."""
+    _task(db_session, kiosk, document)
+    claimed = claim_next_task(db_session, kiosk_id=kiosk.id)
+    claimed.lease_expires_at = datetime.now(UTC) + timedelta(seconds=5)
+    db_session.flush()
+
+    renewed = renew_held_lease(
+        db_session, kiosk_id=kiosk.id, task_public_id=claimed.public_id
+    )
+
+    assert renewed is True
+    assert claimed.lease_expires_at > datetime.now(UTC) + timedelta(minutes=10)
+
+
+def test_a_task_is_renewed_only_by_its_own_kiosk(db_session, kiosk, document):
+    _task(db_session, kiosk, document)
+    claimed = claim_next_task(db_session, kiosk_id=kiosk.id)
+    before = claimed.lease_expires_at
+
+    renewed = renew_held_lease(
+        db_session, kiosk_id=kiosk.id + 999, task_public_id=claimed.public_id
+    )
+
+    assert renewed is False
+    assert claimed.lease_expires_at == before
+
+
+def test_a_finished_task_is_not_renewed(db_session, kiosk, document):
+    _task(db_session, kiosk, document)
+    claimed = claim_next_task(db_session, kiosk_id=kiosk.id)
+    claimed.state = TaskState.PRINTED
+    claimed.lease_expires_at = None
+    db_session.flush()
+
+    renewed = renew_held_lease(
+        db_session, kiosk_id=kiosk.id, task_public_id=claimed.public_id
+    )
+
+    assert renewed is False
+    assert claimed.lease_expires_at is None
+
+
+def test_renewing_an_unknown_task_is_not_an_error(db_session, kiosk):
+    assert (
+        renew_held_lease(db_session, kiosk_id=kiosk.id, task_public_id="tsk_nothing")
+        is False
+    )
 
 
 def test_the_lease_is_generous_enough_for_a_real_print_job():

@@ -27,7 +27,7 @@ from app.modules.kiosks import (
     tray_capacity,
 )
 from app.modules.kiosks import repository as kiosk_repo
-from app.modules.printing import queue_depth
+from app.modules.printing import queue_depth, renew_held_lease
 
 router = APIRouter(prefix="/v1/device", tags=["device"])
 
@@ -78,6 +78,11 @@ def heartbeat(
         ssh_host=payload.ssh_host,
         status=_status_from(payload.status),
     )
+    if payload.task_id:
+        # Only a job this kiosk holds is renewed. Anything else is ignored
+        # rather than refused: a heartbeat that fails makes a working shop look
+        # offline.
+        renew_held_lease(db, kiosk_id=device.kiosk_id, task_public_id=payload.task_id)
     kiosk = kiosk_repo.kiosk_of_device(db, device)
 
     return DeviceHeartbeatResponse(

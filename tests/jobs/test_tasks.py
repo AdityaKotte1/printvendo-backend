@@ -427,69 +427,20 @@ def _claimed_task(db_session, kiosk, user, *, lease_ends):
     return task
 
 
-def test_a_job_a_dead_agent_was_holding_goes_back_in_the_queue(
+def test_a_job_a_silent_machine_was_holding_is_failed_not_reprinted(
     db_session, settings, user
 ):
-    """`requeue_expired` was written, documented as the crash-recovery
-    mechanism, exported -- and called by nothing. So an agent that died mid-job
-    stranded that task in SENT_TO_DEVICE for ever: the claim only takes QUEUED,
-    so no device could ever see it again, no report ever arrived, and the order
-    sat at PAID permanently with nothing on any surface saying why.
-
-    It happened repeatedly at one shop in an afternoon of restarts.
-    """
+    """It used to go back in the queue. A Windows kiosk whose printer was out of
+    paper held a job in its spooler past the lease, was handed the same job
+    again, spooled another copy, then another -- and every copy came out when
+    paper went in, with no new order anywhere. Whether a lost job printed is
+    something only a person at the counter knows."""
     from app.modules.printing.models import TaskState
 
     kiosk = _kiosk(db_session)
     task = _claimed_task(db_session, kiosk, user, lease_ends=NOW - timedelta(minutes=1))
 
-    tasks.recover_lost_tasks(db_session, settings)
-    # Flushed before reading back: the sweep leaves the change pending for the
-    # scheduler's own commit, and a bare refresh would re-read the row and
-    # discard it -- proving nothing except that refresh works.
-    db_session.flush()
-    db_session.refresh(task)
-
-    assert task.state is TaskState.QUEUED
-    assert task.claimed_at is None
-    assert task.lease_expires_at is None
-
-
-def test_a_job_a_device_is_still_printing_is_left_alone(db_session, settings, user):
-    """The lease is renewed on every progress report, so a live job always has
-    one in the future. Requeueing it would hand the same job to a second
-    device and print it twice."""
-    from app.modules.printing.models import TaskState
-
-    kiosk = _kiosk(db_session)
-    task = _claimed_task(db_session, kiosk, user, lease_ends=NOW + timedelta(minutes=10))
-
-    tasks.recover_lost_tasks(db_session, settings)
-    # Flushed before reading back: the sweep leaves the change pending for the
-    # scheduler's own commit, and a bare refresh would re-read the row and
-    # discard it -- proving nothing except that refresh works.
-    db_session.flush()
-    db_session.refresh(task)
-
-    assert task.state is TaskState.SENT_TO_DEVICE
-
-
-def test_a_job_that_has_defeated_three_devices_is_failed_rather_than_retried(
-    db_session, settings, user
-):
-    """A document that crashes the printer would otherwise be handed out for
-    ever and block everything behind it."""
-    from app.modules.printing.models import TaskState
-
-    kiosk = _kiosk(db_session)
-    task = _claimed_task(db_session, kiosk, user, lease_ends=NOW - timedelta(minutes=1))
-    task.attempts = 3
-    db_session.flush()
-
-    tasks.recover_lost_tasks(db_session, settings)
-    # Flushed before reading back: the sweep leaves the change pending for the
-    # scheduler's own commit, and a bare refresh would re-read the row and
-    # discard it -- proving nothing except that refresh works.
+    tasks.settle_lost_tasks(db_session, settings)
     db_session.flush()
     db_session.refresh(task)
 
@@ -497,7 +448,78 @@ def test_a_job_that_has_defeated_three_devices_is_failed_rather_than_retried(
     assert task.error_code == "LEASE_EXPIRED"
 
 
-def test_a_recovery_sweep_with_nothing_lost_says_nothing(db_session, settings):
+def test_a_job_a_machine_is_still_holding_is_left_alone(db_session, settings, user):
+    """The heartbeat renews the lease of the job it names, so a job whose
+    machine is still answering always has one in the future."""
+    from app.modules.printing.models import TaskState
+
+    kiosk = _kiosk(db_session)
+    task = _claimed_task(db_session, kiosk, user, lease_ends=NOW + timedelta(minutes=10))
+
+    tasks.settle_lost_tasks(db_session, settings)
+    db_session.flush()
+    db_session.refresh(task)
+
+    assert task.state is TaskState.SENT_TO_DEVICE
+
+
+def test_the_order_behind_a_lost_job_says_it_failed(db_session, settings, user):
+    """Failing the job is half of it. Before this sweep a lost job left its
+    order at PAID for ever, and the student's screen said "queued" about paper
+    that was never coming."""
+    from app.modules.orders.service import (
+        RequestedDocument,
+        pay_with_wallet,
+        place_order,
+    )
+    from app.modules.printing import PrintOptions, claim_next_task
+    from app.modules.wallet import EntryKind, credit
+
+    kiosk = _kiosk(db_session)
+    kiosk.accepts_wallet = True
+    kiosk.price_bw_double = Decimal("3.00")
+    kiosk.price_color_single = Decimal("10.00")
+    kiosk.price_color_double = Decimal("18.00")
+    db_session.flush()
+    credit(
+        db_session,
+        user_id=user.id,
+        amount=Decimal("100.00"),
+        kind=EntryKind.TOPUP,
+        reference="settle_lost_1",
+    )
+    document = Document(
+        user_id=user.id,
+        original_filename="lost.pdf",
+        page_count=2,
+        original_path="originals/2026/09/lost.pdf",
+        state=DocumentState.READY,
+    )
+    db_session.add(document)
+    db_session.flush()
+    order = place_order(
+        db_session,
+        user=user,
+        kiosk=kiosk,
+        requests=[
+            RequestedDocument(
+                document=document, options=PrintOptions.create(total_pages=2)
+            )
+        ],
+        method=PaymentMethod.WALLET,
+    )
+    pay_with_wallet(db_session, order)
+    claimed = claim_next_task(db_session, kiosk_id=kiosk.id)
+    claimed.lease_expires_at = datetime.now(UTC) - timedelta(minutes=1)
+    db_session.flush()
+
+    tasks.settle_lost_tasks(db_session, settings)
+    db_session.flush()
+
+    assert order.state is OrderState.PARTIALLY_FAILED
+
+
+def test_a_sweep_with_nothing_lost_says_nothing(db_session, settings):
     """It runs every minute and almost every run finds nothing. A sentence per
     tick would bury the ones that matter."""
-    assert tasks.recover_lost_tasks(db_session, settings) == ""
+    assert tasks.settle_lost_tasks(db_session, settings) == ""

@@ -499,3 +499,41 @@ def test_a_blocked_task_consumes_no_paper_and_is_not_failed(
     assert task.state is TaskState.BLOCKED
     after = client.post("/v1/device/heartbeat", json={}, headers=headers).json()
     assert after["sheets_remaining"] == 250
+
+
+# ── a heartbeat keeps the job it names alive ───────────────────────────────
+
+
+def test_a_heartbeat_naming_the_job_in_hand_renews_its_lease(
+    client, db_session, store, kiosk, student
+):
+    """A job waiting in a spooler behind an empty tray is not lost, and its
+    lease must not run out underneath it. Only silence should."""
+    from datetime import UTC, datetime
+
+    headers = _device_headers(db_session, kiosk)
+    _, task = _queue(db_session, store, kiosk, student)
+    claimed = client.post("/v1/device/tasks/next", headers=headers).json()
+    task.lease_expires_at = datetime.now(UTC) + timedelta(seconds=5)
+    db_session.flush()
+
+    response = client.post(
+        "/v1/device/heartbeat", json={"task_id": claimed["task_id"]}, headers=headers
+    )
+    db_session.flush()
+
+    assert response.status_code == 200
+    assert task.lease_expires_at > datetime.now(UTC) + timedelta(minutes=10)
+
+
+def test_a_heartbeat_naming_a_job_it_does_not_hold_is_still_a_heartbeat(
+    client, db_session, kiosk
+):
+    """Refusing it would make a working shop look offline."""
+    headers = _device_headers(db_session, kiosk)
+
+    response = client.post(
+        "/v1/device/heartbeat", json={"task_id": "tsk_notmine"}, headers=headers
+    )
+
+    assert response.status_code == 200

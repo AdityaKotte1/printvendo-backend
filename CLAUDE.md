@@ -449,6 +449,14 @@ Copy `.env.example` to `.env` and fill it. The app refuses to boot with a
   own page and the admin console's list (`configured_owners`) both go through
   it, so neither can show more of a key than the other; the list is two queries
   however many owners there are.
+- **A lost print is failed, never handed out again.** `claims.fail_expired`
+  fails a task whose lease ran out, and `app.jobs.tasks.settle_lost_tasks` runs
+  it every minute and re-derives the order. It used to requeue: a Windows kiosk
+  whose printer was out of paper held a job in its spooler past the lease, was
+  handed the same job again and spooled a second copy, then a third, and every
+  copy came out when paper went in -- with no new order anywhere. The lease is
+  renewed only by a heartbeat that names the job (`renew_held_lease`), so it
+  runs out when a machine goes quiet, not when a printer is slow.
 
 ## How this work is done
 

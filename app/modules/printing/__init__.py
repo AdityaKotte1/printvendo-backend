@@ -15,11 +15,11 @@ root supplies it -- rather than the two contexts importing each other.
 
 from app.modules.printing.claims import (
     LEASE,
-    MAX_ATTEMPTS,
     claim_next_task,
+    fail_expired,
     queue_depth,
+    renew_held_lease,
     renew_lease,
-    requeue_expired,
 )
 from app.modules.printing.documents import (
     DocumentUse,
@@ -63,7 +63,6 @@ from app.modules.printing.tasks import (
 
 __all__ = [
     "LEASE",
-    "MAX_ATTEMPTS",
     "MAX_COPIES",
     "TERMINAL_TASK_STATES",
     "Document",
@@ -101,7 +100,8 @@ __all__ = [
     "report_failed",
     "report_printed",
     "render_layout",
-    "requeue_expired",
+    "fail_expired",
+    "renew_held_lease",
     "start_printing",
     "workload",
 ]

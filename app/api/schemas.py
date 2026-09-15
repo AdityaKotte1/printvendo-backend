@@ -157,6 +157,11 @@ class DeviceHeartbeatRequest(BaseModel):
     # not have one, and the console says so rather than showing a command that
     # will not work.
     ssh_host: str | None = None
+    # The job this machine is holding, if any. Naming it renews that job's lease,
+    # so a job waiting in a spooler behind an empty tray is not mistaken for a
+    # lost one. Older agents send nothing, and their jobs keep the lease they
+    # were claimed with.
+    task_id: str | None = None
 
 
 class DeviceHeartbeatResponse(BaseModel):

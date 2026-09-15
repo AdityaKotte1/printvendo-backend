@@ -173,13 +173,13 @@ def test_a_failing_job_releases_its_lock(settings):
 def test_every_sweep_in_tasks_is_actually_scheduled():
     """The whole point, and the reason this test exists at all.
 
-    `requeue_expired` was written, documented as the crash-recovery half of
+    The lease-expiry half of `claims.py` was written, documented as the crash-recovery half of
     claiming, exported from its module -- and called by nothing. Every test
     around it passed, because they all called it directly. An agent that died
     mid-job therefore stranded a paid print for ever, and no test, contract or
     surface said so.
 
-    Writing `recover_lost_tasks` reproduced the same mistake within the hour:
+    Writing the lost-task sweep reproduced the same mistake within the hour:
     deleting its entry from JOBS broke no test.
 
     So the rule is mechanical rather than remembered. Every function in
