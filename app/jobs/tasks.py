@@ -141,36 +141,47 @@ def watch_offline_kiosks(db: Session, settings: Settings) -> str:
     return f"{offline} kiosks are offline" if offline else ""
 
 
+def _people_to_tell(db: Session, kiosk: Kiosk) -> list[str]:
+    """Who hears about a shop's trouble: its owner, its refillers, every admin.
+
+    The owner because it is their takings stopping; the refillers because they
+    are usually nearest the machine, and are the ones who can switch it back on
+    or fill the tray; the admins because a shop nobody owns yet still has to be
+    somebody's problem. All of them rather than one: an owner on a bus and an
+    operator at a desk are not interchangeable at four in the afternoon.
+
+    One implementation for every email a sweep sends, so "who is told" cannot
+    mean one thing for a shop going dark and another for a tray running out.
+
+    Deactivated accounts are left out. `holders_of` includes them deliberately
+    -- right for a list an operator is searching, wrong for a mailing -- and
+    somebody who has been switched off should stop hearing about the estate.
+    """
+    owner = kiosk_repo.owner_of(db, kiosk)
+    people = (
+        ([owner] if owner is not None else [])
+        + kiosk_repo.refillers_of(db, kiosk)
+        + list(identity_repo.holders_of(db, Role.ADMIN))
+    )
+    # One person in two roles is one email. dict.fromkeys keeps the order and
+    # drops the duplicate.
+    return list(
+        dict.fromkeys(
+            person.email for person in people if person.email and person.is_active
+        )
+    )
+
+
 def _tell_them_it_is_offline(
     db: Session, settings: Settings, *, kiosk: Kiosk, device
 ) -> None:
-    """Write to the owner of the shop, and to every admin.
-
-    The owner because it is their takings stopping, and the admins because a
-    shop nobody owns yet still has to be somebody's problem. Both, rather than
-    one or the other: an owner on a bus and an operator at a desk are not
-    interchangeable at four in the afternoon.
+    """Write to everybody `_people_to_tell` names.
 
     Never raises. A watcher that fell over on a bad address would stop
     reporting every shop after it in the sweep, and the alert -- which is the
     durable record -- has already been written by the time this runs.
     """
-    owner = kiosk_repo.owner_of(db, kiosk)
-    admins = identity_repo.holders_of(db, Role.ADMIN)
-
-    # An admin who also owns the shop is one person. dict.fromkeys keeps the
-    # order and drops the duplicate.
-    addresses = list(
-        dict.fromkeys(
-            person.email
-            for person in ([owner] if owner is not None else []) + list(admins)
-            # `holders_of` includes deactivated accounts, deliberately -- that
-            # is right for a list an operator is searching and wrong for a
-            # mailing. Somebody who has been switched off should stop hearing
-            # about the estate.
-            if person is not None and person.email and person.is_active
-        )
-    )
+    addresses = _people_to_tell(db, kiosk)
     if not addresses:
         return
 
@@ -218,7 +229,7 @@ def watch_paper(db: Session, settings: Settings) -> str:
             severity = AlertSeverity.WARNING
             summary = f"{kiosk.name} has {remaining} sheets left."
 
-        raise_alert(
+        alert = raise_alert(
             db,
             kind="kiosk.paper.low",
             severity=severity,
@@ -230,9 +241,40 @@ def watch_paper(db: Session, settings: Settings) -> str:
             now=now,
         )
 
+        # Once per time the tray runs low, as with a shop going offline: this
+        # sweep runs every ten minutes, and the alert's own count is what says
+        # whether anybody has been told. A tray that empties after running low
+        # escalates the same alert, so it is not a second email.
+        if alert.occurrences == 1:
+            _tell_them_paper_is_low(db, settings, kiosk=kiosk, remaining=remaining)
+
     if not (empty or low):
         return ""
     return f"{empty} kiosks out of paper, {low} running low"
+
+
+
+def _tell_them_paper_is_low(
+    db: Session, settings: Settings, *, kiosk: Kiosk, remaining: int
+) -> None:
+    """Write to everybody `_people_to_tell` names that the tray is running out.
+
+    Never raises, for the reason the offline email does not: the alert is
+    already written, and one bad address must not stop the sweep reaching the
+    shops after this one.
+    """
+    addresses = _people_to_tell(db, kiosk)
+    if not addresses:
+        return
+
+    try:
+        notifier = notifier_for(settings, db)
+        for address in addresses:
+            notifier.send_paper_low(
+                email=address, kiosk_name=kiosk.name, sheets_remaining=remaining
+            )
+    except Exception:  # noqa: BLE001 - the alert is already written
+        logger.exception("could not send the paper email for %s", kiosk.public_id)
 
 
 def _selling_kiosks(db: Session) -> list[Kiosk]:

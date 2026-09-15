@@ -237,3 +237,47 @@ def test_an_honest_name_with_an_ampersand_survives_readably():
 
     body = json.loads(seen[0].content)["htmlContent"]
     assert "Ram &amp; Sons Xerox" in body
+
+
+# -- a tray running out -------------------------------------------------------
+
+
+def test_a_low_paper_email_names_the_shop_and_the_count():
+    seen: list[httpx.Request] = []
+
+    _notifier(_accepting(seen)).send_paper_low(
+        email="refiller@example.com",
+        kiosk_name="Mega Ladies Hostel",
+        sheets_remaining=40,
+    )
+
+    sent = json.loads(seen[0].content)
+    assert sent["to"] == [{"email": "refiller@example.com"}]
+    assert "Mega Ladies Hostel" in sent["subject"]
+    assert "40" in sent["subject"]
+
+
+def test_an_empty_tray_says_it_is_out_rather_than_zero_left():
+    """"0 sheets left" reads like a glitch; "out of paper" reads like a trip
+    to the shop."""
+    seen: list[httpx.Request] = []
+
+    _notifier(_accepting(seen)).send_paper_low(
+        email="refiller@example.com", kiosk_name="Shop", sheets_remaining=0
+    )
+
+    assert "out of paper" in json.loads(seen[0].content)["subject"].lower()
+
+
+def test_markup_in_a_kiosk_name_cannot_reach_a_paper_email_as_markup():
+    seen: list[httpx.Request] = []
+
+    _notifier(_accepting(seen)).send_paper_low(
+        email="refiller@example.com",
+        kiosk_name='<a href="https://evil.example">Claim your prize</a>',
+        sheets_remaining=10,
+    )
+
+    body = json.loads(seen[0].content)["htmlContent"]
+    assert '<a href="https://evil.example"' not in body
+    assert "&lt;a href=" in body

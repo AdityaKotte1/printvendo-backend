@@ -144,3 +144,21 @@ def owner_of(db: Session, kiosk: Kiosk) -> User | None:
         .order_by(KioskAssignment.created_at)
     )
     return db.execute(stmt).scalars().first()
+
+
+def refillers_of(db: Session, kiosk: Kiosk) -> list[User]:
+    """Everyone assigned to refill this kiosk, in the order they were assigned.
+
+    Takes no Scope, for the reason `owner_of` does not: the caller has already
+    been through a scoped read to hold the kiosk.
+    """
+    stmt = (
+        select(User)
+        .join(KioskAssignment, KioskAssignment.user_id == User.id)
+        .where(
+            KioskAssignment.kiosk_id == kiosk.id,
+            KioskAssignment.role == AssignmentRole.REFILLER,
+        )
+        .order_by(KioskAssignment.created_at, User.id)
+    )
+    return list(db.execute(stmt).scalars())

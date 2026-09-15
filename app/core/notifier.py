@@ -52,6 +52,12 @@ class Notifier(Protocol):
         """Tell `email` that `kiosk_name` stopped answering."""
         ...
 
+    def send_paper_low(
+        self, *, email: str, kiosk_name: str, sheets_remaining: int
+    ) -> None:
+        """Tell `email` that `kiosk_name`'s tray is nearly or completely empty."""
+        ...
+
 
 class LoggingNotifier:
     """Writes what would have been sent. The default until a provider lands."""
@@ -83,6 +89,13 @@ class LoggingNotifier:
     ) -> None:
         logger.info("kiosk offline to %s -- %s, last seen %s", email, kiosk_name, last_seen)
 
+    def send_paper_low(
+        self, *, email: str, kiosk_name: str, sheets_remaining: int
+    ) -> None:
+        logger.info(
+            "paper low to %s -- %s, %s sheets left", email, kiosk_name, sheets_remaining
+        )
+
 
 class NullNotifier:
     """Sends nothing at all. For tests that do not care."""
@@ -108,6 +121,11 @@ class NullNotifier:
 
     def send_kiosk_offline(
         self, *, email: str, kiosk_name: str, last_seen: str | None
+    ) -> None:
+        return None
+
+    def send_paper_low(
+        self, *, email: str, kiosk_name: str, sheets_remaining: int
     ) -> None:
         return None
 
@@ -299,6 +317,44 @@ class BrevoNotifier:
                 "internet is down, or the agent has stopped.</p>"
                 "<p>You will not get another email about this shop until it "
                 "comes back and goes offline again.</p>"
+            ),
+        )
+
+    def send_paper_low(
+        self, *, email: str, kiosk_name: str, sheets_remaining: int
+    ) -> None:
+        """A tray is nearly or completely empty.
+
+        Written for whoever can fix it -- usually a refiller -- so it carries a
+        sheet count and nothing about money, which a refiller's own surface does
+        not carry either. The name is escaped for the reason the offline email's
+        is: an owner typed it.
+        """
+        safe_name = html.escape(kiosk_name)
+        if sheets_remaining <= 0:
+            subject = f"{kiosk_name} is out of paper"
+            state = (
+                f"<p><b>{safe_name}</b> is out of paper. Students cannot print "
+                "there until it is refilled.</p>"
+            )
+        else:
+            subject = f"{kiosk_name} has {sheets_remaining} sheets left"
+            state = (
+                f"<p><b>{safe_name}</b> has <b>{sheets_remaining}</b> sheets of "
+                "paper left, and stops taking orders when it runs out.</p>"
+            )
+        self._send(
+            kind="paper_low",
+            email=email,
+            # Named in the subject, as the offline one is: somebody refilling
+            # several shops needs to know which from the notification.
+            subject=subject,
+            body=(
+                state
+                + "<p>Please refill the tray and record the refill in the "
+                "Printvendo app, so the count matches what is in the printer.</p>"
+                "<p>You will not get another email about this tray until it has "
+                "been refilled and runs low again.</p>"
             ),
         )
 

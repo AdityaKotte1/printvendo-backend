@@ -14,7 +14,12 @@ from cryptography.fernet import Fernet
 from app.core.config import Settings
 from app.jobs import tasks
 from app.modules.identity.models import User
-from app.modules.kiosks.enums import DeviceStatus, KioskType, OnboardingStage
+from app.modules.kiosks.enums import (
+    AssignmentRole,
+    DeviceStatus,
+    KioskType,
+    OnboardingStage,
+)
 from app.modules.kiosks.models import Kiosk, KioskDevice, KioskPaper
 from app.modules.ops import AlertSeverity, open_alerts
 from app.modules.orders.models import Order, OrderState, PaymentMethod
@@ -293,10 +298,16 @@ class _Sent:
 
     def __init__(self) -> None:
         self.offline: list[dict] = []
+        self.paper: list[dict] = []
 
     def send_kiosk_offline(self, *, email, kiosk_name, last_seen):
         self.offline.append(
             {"email": email, "kiosk": kiosk_name, "last_seen": last_seen}
+        )
+
+    def send_paper_low(self, *, email, kiosk_name, sheets_remaining):
+        self.paper.append(
+            {"email": email, "kiosk": kiosk_name, "sheets": sheets_remaining}
         )
 
 
@@ -317,6 +328,18 @@ def _admin(db_session, email: str, *, active: bool = True) -> User:
     db_session.add(person)
     db_session.flush()
     identity_repo.grant_role(db_session, person.id, Role.ADMIN)
+    db_session.flush()
+    return person
+
+
+def _staff(db_session, kiosk, email: str, role, *, active: bool = True) -> User:
+    """Somebody assigned to this kiosk -- its owner, or one of its refillers."""
+    from app.modules.kiosks.models import KioskAssignment
+
+    person = User(email=email, hashed_password="x", is_active=active)
+    db_session.add(person)
+    db_session.flush()
+    db_session.add(KioskAssignment(kiosk_id=kiosk.id, user_id=person.id, role=role))
     db_session.flush()
     return person
 
@@ -394,6 +417,138 @@ def test_a_switched_off_admin_is_not_written_to(db_session, settings, sent):
     tasks.watch_offline_kiosks(db_session, settings)
 
     assert [m["email"] for m in sent.offline] == ["here@example.com"]
+
+
+def test_a_shop_going_dark_writes_to_its_owner_and_its_refillers(
+    db_session, settings, sent
+):
+    """A refiller is often the one nearest the machine -- the person who can
+    walk over and switch it back on."""
+    kiosk = _kiosk(db_session)
+    _device(db_session, kiosk, last_seen=NOW - timedelta(minutes=20))
+    _staff(db_session, kiosk, "owner@example.com", AssignmentRole.OWNER)
+    _staff(db_session, kiosk, "refiller@example.com", AssignmentRole.REFILLER)
+    _admin(db_session, "operator@example.com")
+
+    tasks.watch_offline_kiosks(db_session, settings)
+
+    assert [m["email"] for m in sent.offline] == [
+        "owner@example.com",
+        "refiller@example.com",
+        "operator@example.com",
+    ]
+
+
+def test_another_shops_refiller_is_not_written_to(db_session, settings, sent):
+    kiosk = _kiosk(db_session)
+    _device(db_session, kiosk, last_seen=NOW - timedelta(minutes=20))
+    elsewhere = _kiosk(db_session, "Elsewhere")
+    _device(db_session, elsewhere, last_seen=NOW - timedelta(seconds=30))
+    _staff(db_session, elsewhere, "not-theirs@example.com", AssignmentRole.REFILLER)
+    _admin(db_session, "operator@example.com")
+
+    tasks.watch_offline_kiosks(db_session, settings)
+
+    assert [m["email"] for m in sent.offline] == ["operator@example.com"]
+
+
+def test_a_switched_off_refiller_is_not_written_to(db_session, settings, sent):
+    kiosk = _kiosk(db_session)
+    _device(db_session, kiosk, last_seen=NOW - timedelta(minutes=20))
+    _staff(db_session, kiosk, "gone@example.com", AssignmentRole.REFILLER, active=False)
+    _staff(db_session, kiosk, "here@example.com", AssignmentRole.REFILLER)
+
+    tasks.watch_offline_kiosks(db_session, settings)
+
+    assert [m["email"] for m in sent.offline] == ["here@example.com"]
+
+
+# ── telling somebody the tray is running out ────────────────────────────────
+
+
+def test_a_low_tray_writes_to_the_owner_the_refillers_and_the_admins(
+    db_session, settings, sent
+):
+    """The refiller is the one who can fix it; the owner and the admins are
+    the ones whose shop stops selling if nobody does."""
+    kiosk = _kiosk(db_session, sheets=40)
+    _staff(db_session, kiosk, "owner@example.com", AssignmentRole.OWNER)
+    _staff(db_session, kiosk, "refiller@example.com", AssignmentRole.REFILLER)
+    _admin(db_session, "operator@example.com")
+
+    tasks.watch_paper(db_session, settings)
+
+    assert [m["email"] for m in sent.paper] == [
+        "owner@example.com",
+        "refiller@example.com",
+        "operator@example.com",
+    ]
+    assert {(m["kiosk"], m["sheets"]) for m in sent.paper} == {(kiosk.name, 40)}
+
+
+def test_fifty_sheets_is_low_and_fifty_one_is_not(db_session, settings, sent):
+    """"Fifty or less" -- the boundary somebody asked for."""
+    at_fifty = _kiosk(db_session, "At Fifty", sheets=50)
+    _kiosk(db_session, "At Fifty-One", sheets=51)
+    _admin(db_session, "operator@example.com")
+
+    tasks.watch_paper(db_session, settings)
+
+    assert [m["kiosk"] for m in sent.paper] == [at_fifty.name]
+
+
+def test_a_tray_still_low_is_not_reported_again(db_session, settings, sent):
+    """Swept every ten minutes. A shop that runs low at six in the evening
+    would otherwise send eighty emails by morning."""
+    _kiosk(db_session, sheets=40)
+    _admin(db_session, "operator@example.com")
+
+    tasks.watch_paper(db_session, settings)
+    tasks.watch_paper(db_session, settings)
+    tasks.watch_paper(db_session, settings)
+
+    assert len(sent.paper) == 1
+
+
+def test_a_tray_refilled_and_run_low_again_is_reported_again(
+    db_session, settings, sent
+):
+    kiosk = _kiosk(db_session, sheets=40)
+    _admin(db_session, "operator@example.com")
+    tasks.watch_paper(db_session, settings)
+
+    paper = db_session.get(KioskPaper, kiosk.id)
+    paper.used = 0
+    db_session.flush()
+    tasks.watch_paper(db_session, settings)
+
+    paper.used = paper.capacity - 30
+    db_session.flush()
+    tasks.watch_paper(db_session, settings)
+
+    assert [m["sheets"] for m in sent.paper] == [40, 30]
+
+
+def test_a_full_tray_writes_to_nobody(db_session, settings, sent):
+    _kiosk(db_session, sheets=400)
+    _admin(db_session, "operator@example.com")
+
+    tasks.watch_paper(db_session, settings)
+
+    assert sent.paper == []
+
+
+def test_another_shops_refiller_hears_nothing_about_this_tray(
+    db_session, settings, sent
+):
+    _kiosk(db_session, sheets=10)
+    elsewhere = _kiosk(db_session, "Elsewhere", sheets=400)
+    _staff(db_session, elsewhere, "not-theirs@example.com", AssignmentRole.REFILLER)
+    _admin(db_session, "operator@example.com")
+
+    tasks.watch_paper(db_session, settings)
+
+    assert [m["email"] for m in sent.paper] == ["operator@example.com"]
 
 
 # ── work a dead device left holding ─────────────────────────────────────────
